@@ -1,34 +1,47 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum AppThemeMode { system, light, dark }
+
 enum _SharedPreferencesKeys {
   isDarkMode,
+  themeMode,
   isSplitLayout,
   defaultFolderPath,
   readerFontSize,
 }
 
 class DevicePreferences {
-  final bool isDarkMode;
+  final AppThemeMode themeMode;
   final bool isSplitLayout;
   final String? defaultFolderPath;
   final double readerFontSize;
 
   DevicePreferences({
-    this.isDarkMode = false,
+    this.themeMode = AppThemeMode.system,
     this.isSplitLayout = false,
     this.defaultFolderPath,
     this.readerFontSize = 17,
   });
 
+  bool get isDarkMode {
+    return switch (themeMode) {
+      AppThemeMode.system =>
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+            Brightness.dark,
+      AppThemeMode.light => false,
+      AppThemeMode.dark => true,
+    };
+  }
+
   DevicePreferences copyWith({
-    bool? isDarkMode,
+    AppThemeMode? themeMode,
     bool? isSplitLayout,
     String? defaultFolderPath,
     double? readerFontSize,
   }) {
     return DevicePreferences(
-      isDarkMode: isDarkMode ?? this.isDarkMode,
+      themeMode: themeMode ?? this.themeMode,
       isSplitLayout: isSplitLayout ?? this.isSplitLayout,
       defaultFolderPath: defaultFolderPath ?? this.defaultFolderPath,
       readerFontSize: readerFontSize ?? this.readerFontSize,
@@ -38,7 +51,7 @@ class DevicePreferences {
   @override
   bool operator ==(Object other) {
     return other is DevicePreferences &&
-        other.isDarkMode == isDarkMode &&
+        other.themeMode == themeMode &&
         other.isSplitLayout == isSplitLayout &&
         other.defaultFolderPath == defaultFolderPath &&
         other.readerFontSize == readerFontSize;
@@ -46,11 +59,11 @@ class DevicePreferences {
 
   @override
   int get hashCode =>
-      Object.hash(isDarkMode, isSplitLayout, defaultFolderPath, readerFontSize);
+      Object.hash(themeMode, isSplitLayout, defaultFolderPath, readerFontSize);
 
   @override
   String toString() {
-    return 'DevicePreferences(isDarkMode: $isDarkMode, isSplitLayout: $isSplitLayout, defaultFolderPath: $defaultFolderPath, readerFontSize: $readerFontSize)';
+    return 'DevicePreferences(themeMode: $themeMode, isSplitLayout: $isSplitLayout, defaultFolderPath: $defaultFolderPath, readerFontSize: $readerFontSize)';
   }
 }
 
@@ -62,10 +75,7 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
     _prefs = await SharedPreferencesWithCache.create(
       cacheOptions: const SharedPreferencesWithCacheOptions(),
     );
-    final isDarkMode =
-        _prefs.getBool(_SharedPreferencesKeys.isDarkMode.name) ??
-        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
-            Brightness.dark;
+    final themeMode = _loadThemeMode();
     final isSplitLayout =
         _prefs.getBool(_SharedPreferencesKeys.isSplitLayout.name) ?? true;
     final defaultFolderPath = _prefs.getString(
@@ -74,7 +84,7 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
     final readerFontSize =
         _prefs.getDouble(_SharedPreferencesKeys.readerFontSize.name) ?? 17;
     value = DevicePreferences(
-      isDarkMode: isDarkMode,
+      themeMode: themeMode,
       isSplitLayout: isSplitLayout,
       defaultFolderPath: defaultFolderPath,
       readerFontSize: readerFontSize,
@@ -83,18 +93,21 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
   }
 
   Future<void> toggleTheme() async {
-    value = value.copyWith(isDarkMode: !value.isDarkMode);
-    await _prefs.setBool(
-      _SharedPreferencesKeys.isDarkMode.name,
-      value.isDarkMode,
+    final nextMode = value.isDarkMode ? AppThemeMode.light : AppThemeMode.dark;
+    await setThemeMode(nextMode);
+  }
+
+  Future<void> setThemeMode(AppThemeMode themeMode) async {
+    value = value.copyWith(themeMode: themeMode);
+    await _prefs.setString(
+      _SharedPreferencesKeys.themeMode.name,
+      themeMode.name,
     );
     notifyListeners();
   }
 
   Future<void> setDarkMode(bool isDarkMode) async {
-    value = value.copyWith(isDarkMode: isDarkMode);
-    await _prefs.setBool(_SharedPreferencesKeys.isDarkMode.name, isDarkMode);
-    notifyListeners();
+    await setThemeMode(isDarkMode ? AppThemeMode.dark : AppThemeMode.light);
   }
 
   Future<void> toggleLayout() async {
@@ -119,5 +132,25 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
       fontSize,
     );
     notifyListeners();
+  }
+
+  AppThemeMode _loadThemeMode() {
+    final themeModeName = _prefs.getString(
+      _SharedPreferencesKeys.themeMode.name,
+    );
+    if (themeModeName != null) {
+      for (final mode in AppThemeMode.values) {
+        if (mode.name == themeModeName) {
+          return mode;
+        }
+      }
+    }
+    final legacyDarkMode = _prefs.getBool(
+      _SharedPreferencesKeys.isDarkMode.name,
+    );
+    if (legacyDarkMode != null) {
+      return legacyDarkMode ? AppThemeMode.dark : AppThemeMode.light;
+    }
+    return AppThemeMode.system;
   }
 }

@@ -6,7 +6,7 @@ import 'package:markdown_editor/github/github_config.dart';
 import 'package:path_provider/path_provider.dart';
 
 class MarkdownCacheStore {
-  Future<String?> read({
+  Future<CachedMarkdownFile?> read({
     required GithubConfig config,
     required String path,
   }) async {
@@ -14,17 +14,54 @@ class MarkdownCacheStore {
     if (!await file.exists()) {
       return null;
     }
-    return file.readAsString();
+    final content = await file.readAsString();
+    final metadata = await _readMetadata(config: config, path: path);
+    return CachedMarkdownFile(content: content, sha: metadata?.sha);
   }
 
   Future<void> write({
     required GithubConfig config,
     required String path,
     required String content,
+    required String sha,
   }) async {
     final file = await _fileFor(config: config, path: path);
     await file.parent.create(recursive: true);
     await file.writeAsString(content);
+    final metadataFile = await _metadataFileFor(config: config, path: path);
+    await metadataFile.writeAsString(jsonEncode({'sha': sha}));
+  }
+
+  Future<bool> isFresh({
+    required GithubConfig config,
+    required String path,
+    required String sha,
+  }) async {
+    final file = await _fileFor(config: config, path: path);
+    if (!await file.exists()) {
+      return false;
+    }
+    final metadata = await _readMetadata(config: config, path: path);
+    return metadata?.sha == sha;
+  }
+
+  Future<CachedMarkdownMetadata?> _readMetadata({
+    required GithubConfig config,
+    required String path,
+  }) async {
+    final metadataFile = await _metadataFileFor(config: config, path: path);
+    if (!await metadataFile.exists()) {
+      return null;
+    }
+    final decoded = jsonDecode(await metadataFile.readAsString());
+    if (decoded is! Map<String, Object?>) {
+      return null;
+    }
+    final sha = decoded['sha'];
+    if (sha is! String) {
+      return null;
+    }
+    return CachedMarkdownMetadata(sha: sha);
   }
 
   Future<File> _fileFor({
@@ -39,4 +76,30 @@ class MarkdownCacheStore {
         .toString();
     return File('${directory.path}/markdown_cache/$key.md');
   }
+
+  Future<File> _metadataFileFor({
+    required GithubConfig config,
+    required String path,
+  }) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final key = sha256
+        .convert(
+          utf8.encode('${config.owner}/${config.repo}/${config.branch}/$path'),
+        )
+        .toString();
+    return File('${directory.path}/markdown_cache/$key.json');
+  }
+}
+
+class CachedMarkdownFile {
+  const CachedMarkdownFile({required this.content, required this.sha});
+
+  final String content;
+  final String? sha;
+}
+
+class CachedMarkdownMetadata {
+  const CachedMarkdownMetadata({required this.sha});
+
+  final String sha;
 }

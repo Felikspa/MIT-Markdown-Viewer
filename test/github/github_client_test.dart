@@ -30,10 +30,14 @@ void main() {
           return http.Response(
             jsonEncode({
               'tree': [
-                {'path': 'README.md', 'type': 'blob'},
-                {'path': 'docs/chapter.markdown', 'type': 'blob'},
-                {'path': 'assets/cover.png', 'type': 'blob'},
-                {'path': 'docs', 'type': 'tree'},
+                {'path': 'README.md', 'type': 'blob', 'sha': 'sha-1'},
+                {
+                  'path': 'docs/chapter.markdown',
+                  'type': 'blob',
+                  'sha': 'sha-2',
+                },
+                {'path': 'assets/cover.png', 'type': 'blob', 'sha': 'sha-3'},
+                {'path': 'docs', 'type': 'tree', 'sha': 'sha-4'},
               ],
             }),
             200,
@@ -47,6 +51,7 @@ void main() {
         'README.md',
         'docs/chapter.markdown',
       ]);
+      expect(entries.map((entry) => entry.sha), ['sha-1', 'sha-2']);
     },
   );
 

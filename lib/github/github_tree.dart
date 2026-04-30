@@ -1,17 +1,25 @@
 class GithubTreeEntry {
-  const GithubTreeEntry({required this.path, required this.type});
+  const GithubTreeEntry({
+    required this.path,
+    required this.type,
+    required this.sha,
+  });
 
   factory GithubTreeEntry.fromJson(Map<String, Object?> json) {
     final path = json['path'];
     final type = json['type'];
-    if (path is! String || type is! String) {
-      throw const FormatException('GitHub tree entry is missing path or type.');
+    final sha = json['sha'];
+    if (path is! String || type is! String || sha is! String) {
+      throw const FormatException(
+        'GitHub tree entry is missing path, type, or sha.',
+      );
     }
-    return GithubTreeEntry(path: path, type: type);
+    return GithubTreeEntry(path: path, type: type, sha: sha);
   }
 
   final String path;
   final String type;
+  final String sha;
 
   bool get isMarkdownFile {
     final lowerPath = path.toLowerCase();
@@ -41,7 +49,9 @@ class GithubDirectoryNode {
         final part = parts[index];
         final isFile = index == parts.length - 1;
         if (isFile) {
-          current.files.add(GithubMarkdownFile(name: part, path: entry.path));
+          current.files.add(
+            GithubMarkdownFile(name: part, path: entry.path, sha: entry.sha),
+          );
         } else {
           final directoryPath = parts.take(index + 1).join('/');
           current = current.directories.putIfAbsent(
@@ -77,8 +87,13 @@ class GithubDirectoryNode {
 }
 
 class GithubMarkdownFile {
-  const GithubMarkdownFile({required this.name, required this.path});
+  const GithubMarkdownFile({
+    required this.name,
+    required this.path,
+    required this.sha,
+  });
 
   final String name;
   final String path;
+  final String sha;
 }

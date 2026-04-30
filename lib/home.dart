@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
 import 'package:markdown_editor/device_preference_notifier.dart';
 import 'package:markdown_editor/github/github_client.dart';
 import 'package:markdown_editor/github/github_config.dart';
@@ -29,6 +30,7 @@ class _HomeState extends State<Home> {
   GithubConfig? _editingConfig;
   Object? _loadError;
   bool _isLoading = true;
+  int _repositoryRevision = 0;
 
   @override
   void initState() {
@@ -66,6 +68,17 @@ class _HomeState extends State<Home> {
     setState(() {
       _config = config.trimmed();
       _editingConfig = null;
+      _repositoryRevision++;
+    });
+  }
+
+  Future<void> _repositoryUpdated() async {
+    await _loadConfig();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _repositoryRevision++;
     });
   }
 
@@ -80,6 +93,7 @@ class _HomeState extends State<Home> {
           config: config,
           devicePreferenceNotifier: widget.devicePreferenceNotifier,
           onSaveConfig: _saveConfig,
+          onRepositoryUpdated: _repositoryUpdated,
         ),
       ),
     );
@@ -111,6 +125,7 @@ class _HomeState extends State<Home> {
 
     return _RepositoryScreen(
       config: config,
+      revision: _repositoryRevision,
       devicePreferenceNotifier: widget.devicePreferenceNotifier,
       onSettingsPressed: _openSettings,
     );
@@ -307,11 +322,13 @@ class _SettingsScreen extends StatefulWidget {
   final GithubConfig config;
   final DevicePreferenceNotifier devicePreferenceNotifier;
   final Future<void> Function(GithubConfig config) onSaveConfig;
+  final Future<void> Function() onRepositoryUpdated;
 
   const _SettingsScreen({
     required this.config,
     required this.devicePreferenceNotifier,
     required this.onSaveConfig,
+    required this.onRepositoryUpdated,
   });
 
   @override
@@ -321,6 +338,8 @@ class _SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<_SettingsScreen> {
   late GithubConfig _config;
   late double _readerFontSize;
+  bool _isSyncing = false;
+  String? _syncStatus;
 
   @override
   void initState() {
@@ -352,8 +371,64 @@ class _SettingsScreenState extends State<_SettingsScreen> {
     );
   }
 
-  Future<void> _setDarkMode(bool enabled) async {
-    await widget.devicePreferenceNotifier.setDarkMode(enabled);
+  Future<void> _syncAllMarkdown() async {
+    setState(() {
+      _isSyncing = true;
+      _syncStatus = 'Loading repository tree...';
+    });
+    try {
+      final client = GithubClient(config: _config);
+      final cacheStore = MarkdownCacheStore();
+      final entries = await client.fetchMarkdownTree();
+      var updated = 0;
+      var skipped = 0;
+      for (var index = 0; index < entries.length; index++) {
+        final entry = entries[index];
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _syncStatus = 'Syncing ${index + 1}/${entries.length}';
+        });
+        final isFresh = await cacheStore.isFresh(
+          config: _config,
+          path: entry.path,
+          sha: entry.sha,
+        );
+        if (isFresh) {
+          skipped++;
+          continue;
+        }
+        final content = await client.fetchMarkdownFile(entry.path);
+        await cacheStore.write(
+          config: _config,
+          path: entry.path,
+          content: content,
+          sha: entry.sha,
+        );
+        updated++;
+      }
+      await widget.onRepositoryUpdated();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _syncStatus = 'Synced $updated files, skipped $skipped unchanged.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _syncStatus = error.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncing = false;
+        });
+      }
+    }
   }
 
   void _setReaderFontSize(double value) {
@@ -393,6 +468,21 @@ class _SettingsScreenState extends State<_SettingsScreen> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _editRepository,
                 ),
+                ListTile(
+                  leading: _isSyncing
+                      ? const SizedBox.square(
+                          dimension: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_sync),
+                  title: const Text('Sync all Markdown'),
+                  subtitle: Text(
+                    _syncStatus ??
+                        'Download every Markdown file and refresh local cache.',
+                  ),
+                  enabled: !_isSyncing,
+                  onTap: _isSyncing ? null : _syncAllMarkdown,
+                ),
                 const Divider(height: 28),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
@@ -404,13 +494,39 @@ class _SettingsScreenState extends State<_SettingsScreen> {
                     ),
                   ),
                 ),
-                SwitchListTile(
-                  secondary: Icon(
-                    preferences.isDarkMode ? Icons.dark_mode : Icons.light_mode,
+                ListTile(
+                  leading: const Icon(Icons.contrast),
+                  title: const Text('Theme'),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: SegmentedButton<AppThemeMode>(
+                      segments: const [
+                        ButtonSegment(
+                          value: AppThemeMode.system,
+                          icon: Icon(Icons.settings_suggest),
+                          label: Text('System'),
+                        ),
+                        ButtonSegment(
+                          value: AppThemeMode.light,
+                          icon: Icon(Icons.light_mode),
+                          label: Text('Light'),
+                        ),
+                        ButtonSegment(
+                          value: AppThemeMode.dark,
+                          icon: Icon(Icons.dark_mode),
+                          label: Text('Dark'),
+                        ),
+                      ],
+                      selected: {preferences.themeMode},
+                      onSelectionChanged: (selection) {
+                        unawaited(
+                          widget.devicePreferenceNotifier.setThemeMode(
+                            selection.single,
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                  title: const Text('Dark mode'),
-                  value: preferences.isDarkMode,
-                  onChanged: (value) => unawaited(_setDarkMode(value)),
                 ),
                 ListTile(
                   leading: const Icon(Icons.format_size),
@@ -443,11 +559,13 @@ class _SettingsScreenState extends State<_SettingsScreen> {
 
 class _RepositoryScreen extends StatefulWidget {
   final GithubConfig config;
+  final int revision;
   final DevicePreferenceNotifier devicePreferenceNotifier;
   final Future<void> Function() onSettingsPressed;
 
   const _RepositoryScreen({
     required this.config,
+    required this.revision,
     required this.devicePreferenceNotifier,
     required this.onSettingsPressed,
   });
@@ -468,7 +586,8 @@ class _RepositoryScreenState extends State<_RepositoryScreen> {
   @override
   void didUpdateWidget(covariant _RepositoryScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.config != widget.config) {
+    if (oldWidget.config != widget.config ||
+        oldWidget.revision != widget.revision) {
       _treeFuture = _fetchTree();
     }
   }
@@ -629,6 +748,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
   double? _cachedFontSize;
   bool? _cachedIsDark;
   _ReaderRenderModel? _cachedRenderModel;
+  _ReaderContentStatus? _lastShownContentStatus;
 
   @override
   void initState() {
@@ -647,6 +767,29 @@ class _ReaderScreenState extends State<_ReaderScreen> {
   }
 
   Future<_ReaderContent> _fetchContent() async {
+    final cachedContent = await _cacheStore.read(
+      config: widget.config,
+      path: widget.file.path,
+    );
+
+    final hasConnection = await InternetConnection().hasInternetAccess;
+    if (!hasConnection) {
+      if (cachedContent == null) {
+        throw const GithubApiException('Offline and no cached copy exists.');
+      }
+      return _ReaderContent(
+        content: cachedContent.content,
+        status: _ReaderContentStatus.offlineCached,
+      );
+    }
+
+    if (cachedContent != null && cachedContent.sha == widget.file.sha) {
+      return _ReaderContent(
+        content: cachedContent.content,
+        status: _ReaderContentStatus.upToDate,
+      );
+    }
+
     try {
       final content = await GithubClient(
         config: widget.config,
@@ -655,21 +798,50 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         config: widget.config,
         path: widget.file.path,
         content: content,
+        sha: widget.file.sha,
       );
-      return _ReaderContent(content: content, isCached: false);
+      return _ReaderContent(
+        content: content,
+        status: cachedContent == null
+            ? _ReaderContentStatus.downloaded
+            : _ReaderContentStatus.updated,
+      );
     } catch (_) {
-      final cachedContent = await _cacheStore.read(
-        config: widget.config,
-        path: widget.file.path,
-      );
       if (cachedContent == null) {
         rethrow;
       }
-      return _ReaderContent(content: cachedContent, isCached: true);
+      return _ReaderContent(
+        content: cachedContent.content,
+        status: _ReaderContentStatus.networkFailedCached,
+      );
     }
   }
 
+  void _showContentStatus(_ReaderContentStatus status) {
+    if (_lastShownContentStatus == status) {
+      return;
+    }
+    _lastShownContentStatus = status;
+    final message = switch (status) {
+      _ReaderContentStatus.upToDate => 'Already up to date.',
+      _ReaderContentStatus.updated => 'Updated to the latest version.',
+      _ReaderContentStatus.downloaded => 'Downloaded and cached.',
+      _ReaderContentStatus.offlineCached => 'Offline. Opened cached copy.',
+      _ReaderContentStatus.networkFailedCached =>
+        'Network failed. Opened cached copy.',
+    };
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+      );
+    });
+  }
+
   void _refresh() {
+    _lastShownContentStatus = null;
     setState(() {
       _contentFuture = _fetchContent();
     });
@@ -938,7 +1110,9 @@ class _ReaderScreenState extends State<_ReaderScreen> {
                       onRetry: _refresh,
                     );
                   }
-                  return _markdownView(snapshot.requireData.content);
+                  final content = snapshot.requireData;
+                  _showContentStatus(content.status);
+                  return _markdownView(content.content);
                 },
               ),
             ),
@@ -972,10 +1146,18 @@ class _ReaderScreenState extends State<_ReaderScreen> {
 }
 
 class _ReaderContent {
-  const _ReaderContent({required this.content, required this.isCached});
+  const _ReaderContent({required this.content, required this.status});
 
   final String content;
-  final bool isCached;
+  final _ReaderContentStatus status;
+}
+
+enum _ReaderContentStatus {
+  upToDate,
+  updated,
+  downloaded,
+  offlineCached,
+  networkFailedCached,
 }
 
 class _ReaderRenderModel {

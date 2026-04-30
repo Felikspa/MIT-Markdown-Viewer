@@ -1,154 +1,90 @@
-# 📝 Flutter Markdown Editor
+# MIT Markdown Viewer
 
-Introducing the Markdown Editor app, the perfect tool for anyone who needs to create and edit markdown files with ease. With the ability to open ".md" files directly from the explorer, you can easily access your files and start working on them right away.
+MIT Markdown Viewer is a lightweight Flutter Markdown reader for Android. It is built from the open source Flutter Markdown Editor base and refocused as a mobile-first reader for Markdown notes stored in a GitHub repository.
 
-The app also offers a convenient way to style your text with options such as bold, italics, headings, and more. Adding links is also a breeze with the simple interface.
+The app is designed for private study repositories: configure a GitHub repo once, browse its Markdown directory tree, read files with LaTeX support, and keep a local cache for offline access.
 
-In addition, you can preview JPEG, PNG, GIF, WebP, BMP, and WBMP image formats right within the app. You can easily open links from the preview, making it easy to navigate between different files and sources.
+## Features
 
-Choose between Light and Dark Theme Modes, use Dynamic Color for improved theme customization, and use the Dual View Mode to simultaneously view both the preview and editing views. Alternatively, you can use Single View Mode to focus on either the preview or editing view.
+- Browse Markdown files from a GitHub repository.
+- Supports private repositories with a fine-grained GitHub personal access token.
+- Accepts normal GitHub URLs such as `https://github.com/owner/repo.git`.
+- Renders Markdown with LaTeX formulas:
+  - `$...$`
+  - `$$...$$`
+  - `\(...\)`
+  - `\[...\]`
+- One-tap full repository sync for all Markdown files.
+- Local Markdown cache for offline reading.
+- Cloud version check with GitHub blob `sha`; unchanged files use the local copy.
+- Left drawer table of contents generated from Markdown headings.
+- Immersive reading mode with auto-hiding top and bottom bars.
+- Bottom bar for previous/next Markdown file navigation.
+- Theme options: follow system, light, dark.
+- Adjustable reading font size.
 
-The app also offers the ability to share your markdown files as plain text, markdown, or PDF, clear text and start from scratch, as well as create new .md files or edit existing ones.
+## GitHub Token
 
-This Editor was developed using Flutter and is mainly targeted for mobile devices as currently there aren't any standalone markdown editors available.
+For private repositories, create a GitHub fine-grained personal access token:
 
-Please star⭐ the repo if you like what you see😊.
+1. Open GitHub `Settings`.
+2. Go to `Developer settings`.
+3. Open `Personal access tokens`.
+4. Choose `Fine-grained tokens`.
+5. Generate a new token for the target repository.
+6. Grant `Contents: Read-only`.
+7. Copy the token into the app.
 
-## 💻 Installation links
+The token is stored with `flutter_secure_storage`.
 
-<table>
-  <tr>
-    <th>Platform</th>
-    <th>Installation Links</th>
-  </tr>
-  <tr>
-    <td>Android</td>
-    <td>
-      <a href="https://play.google.com/store/apps/details?id=com.adeeteya.markdown_editor">
-        <img height="80" alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png">
-      </a>
-      <br>
-      <a href="https://f-droid.org/packages/com.adeeteya.markdown_editor">
-        <img height="80" alt="Get it on F-Droid" src="https://f-droid.org/badge/get-it-on.png">
-      </a>
-      <br>
-      <a href="https://github.com/adeeteya/FlutterMarkdownEditor/releases/latest/download/MarkdownEditor-Android.apk">
-        <img alt="APK download" src="https://img.shields.io/static/v1?label=Download&message=Android+.apk&color=2ea44f&style=for-the-badge&logo=Android&logoColor=white&logoSize=auto">
-      </a>
-    </td>
-  </tr>
+## Sync and Offline Behavior
 
-  <tr>
-      <td>Linux</td>
-      <td>
-        <a href="https://github.com/adeeteya/FlutterMarkdownEditor/releases/latest/download/MarkdownEditor-Linux-AppImage.AppImage">
-          <img alt="Download .AppImage" src="https://img.shields.io/static/v1?label=Download&message=.AppImage&color=FCC624&style=for-the-badge&logo=linux&logoColor=white&logoSize=auto">
-        </a>
-        <br>
-        <br>
-        <a href="https://github.com/adeeteya/FlutterMarkdownEditor/releases/latest/download/MarkdownEditor-Linux-deb.deb">
-          <img alt="Download .deb" src="https://img.shields.io/static/v1?label=Download&message=%20%20%20%20%20.deb&color=A81D33&style=for-the-badge&logo=debian&logoColor=white&logoSize=auto">
-        </a>
-        <br>
-        <br>
-        <a href="https://github.com/adeeteya/FlutterMarkdownEditor/releases/latest/download/MarkdownEditor-Linux-rpm.rpm">
-          <img alt="Download .rpm" src="https://img.shields.io/static/v1?label=Download&message=.rpm&color=EE0000&style=for-the-badge&logo=redhat&logoColor=white&logoSize=auto">
-        </a>
-        <br>
-        <br>
-        <a href="https://snapcraft.io/markdown-editor">
-          <img alt="Get it from the Snap Store" src=https://snapcraft.io/en/dark/install.svg />
-        </a>
-      </td>
-  </tr>
+The app uses GitHub's repository tree API to list Markdown files and stores each file locally after it is loaded or synced.
 
-  <tr>
-      <td>Windows</td>
-      <td>
-        <a href="https://github.com/adeeteya/FlutterMarkdownEditor/releases/latest/download/MarkdownEditor-Windows.exe">
-          <img alt="Download Windows Installer" src="https://img.shields.io/static/v1?label=Download&message=Windows+.exe&color=blue&style=for-the-badge&logo=webtrees&logoColor=white&logoSize=auto">
-        </a>
-      </td>
-  </tr>
+When opening a file:
 
-  <tr>
-      <td>Web App</td>
-      <td>
-        <a href="https://adeeteya.github.io/FlutterMarkdownEditor/#/">
-          <img alt="Web App" src="https://img.shields.io/static/v1?label=Webapp&message=Visit+Website&color=blueviolet&style=for-the-badge&logo=googlechrome&logoColor=white&logoSize=auto">
-        </a>
-      </td>
-  </tr>
+1. The app checks the local cache.
+2. If the cached `sha` matches the current GitHub tree entry, it opens the local file immediately.
+3. If GitHub has a newer `sha`, the app downloads the new content and updates the cache.
+4. If the network request fails but a cached copy exists, the cached copy is opened.
 
-</table>
+The settings page includes `Sync all Markdown`, which downloads or updates every Markdown file in the configured repository.
 
-## ✨ Features
+## Development
 
-- [x] Ability to open .md files directly from the explorer
-- [x] Convenient way to style text (bold,italics,headings and etc)
-- [x] Convenient way to add links
-- [x] Convenient way to add tables
-- [x] Ability to preview JPEG, PNG, GIF, WebP, BMP, and WBMP image formats.
-- [x] Easily open links from the preview
-- [x] Light and Dark Theme Modes available
-- [x] Dynamic Color support for improved theme customization
-- [x] Dual View Mode available (Both Preview and Editing View)
-- [x] Single View Mode available (Either Preview or the Editing View)
-- [x] Added Multi Language Support (For Some of the most popular languages of the world)
-- [x] Ability to clear text and start from scratch
-- [x] Create new .md files
-- [x] Edit existing .md files
-- [x] LaTex support
-- [x] Horizontal Swipe to Switch between Preview and Editing View in Single View Mode
-- [x] Default Folder for Opening and Saving .md files
-- [x] Added Print/Save as Pdf Option
-- [x] Added Share as Plain Text, Markdown, and PDF Option
-- [x] Added the option to check/uncheck checkboxes in preview mode
+Install dependencies:
 
-## 🌐 How to contribute to this project's translations
+```bash
+flutter pub get
+```
 
-1. Fork this repository and create a branch dedicated to the translation you want to work on.
-2. The source strings live in lib/l10n/app_en.arb. Copy it to lib/l10n/app_<languageCode>.arb (use the ISO language or language_region code) when adding a new language, or open the existing file if the language is already present.
-3. Translate only the string values. Keep placeholders (such as {count}) and the accompanying @metadata blocks untouched so Flutter can still generate code correctly.
-4. Run flutter gen-l10n from the project root to regenerate lib/l10n/generated/app_localizations.dart and to update untranslated_messages.json.
-5. Launch the app (or run flutter test if you add tests) to double-check that your strings render correctly, then open a pull request describing the language(s) you updated.
+Run checks:
 
-## 📸 Screenshots
+```bash
+flutter analyze
+flutter test
+```
 
-<img alt="Light Mode Image" src="screenshots/screenshot_1.png" height="587px" width="256px"/> <img alt="Dark Mode Image" src="screenshots/screenshot_2.png" height="587px" width="256px"/> <img alt="File Explorer Image" src="screenshots/screenshot_3.png" height="587px" width="256px"/> <img alt="Add Link Image" src="screenshots/screenshot_4.png" height="587px" width="256px"/> <img alt="Markdown Preview Image" src="screenshots/screenshot_5.png" height="587px" width="256px"/> <img alt="Markdown Editor Image" src="screenshots/screenshot_6.png" height="587px" width="256px"/>
+Build Android debug APK:
 
-## 🔌 Plugins
+```bash
+flutter build apk --debug
+```
 
-| Name                                                                                        | Usage                                                       |
-|---------------------------------------------------------------------------------------------|-------------------------------------------------------------|
-| [**dynamic_color**](https://pub.dev/packages/dynamic_color)                                 | For improved theme customization                            |
-| [**expandable**](https://pub.dev/packages/expandable)                                       | To create expandable header buttons                         |
-| [**file_picker**](https://pub.dev/packages/file_picker)                                     | To open markdown files directly from the app                |
-| [**flutter_localizations**](https://pub.dev/packages/flutter_localizations)                 | Internationalizing app                                      |
-| [**flutter_math_fork**](https://pub.dev/packages/flutter_math_fork)                         | Help with LaTeX support                                     |
-| [**flutter_svg**](https://pub.dev/packages/flutter_svg)                                     | To Display Svg Images                                       |
-| [**flutter_widget_from_html_core**](https://pub.dev/packages/flutter_widget_from_html_core) | To add html display support                                 |
-| [**google_fonts**](https://pub.dev/packages/google_fonts)                                   | To add custom fonts support                                 |
-| [**html**](https://pub.dev/packages/html)                                                   | To help display html format                                 |
-| [**htmltopdfwidgets**](https://pub.dev/packages/htmltopdfwidgets)                           | To convert html to pdf for printing                         |
-| [**intl**](https://pub.dev/packages/intl)                                                   | Provides internationalization and localization facilities   |
-| [**markdown**](https://pub.dev/packages/markdown)                                           | To convert markdown to html format                          |
-| [**markdown_widget**](https://pub.dev/packages/markdown_widget)                             | To help display markdown/custom markdown                    |
-| [**pdf**](https://pub.dev/packages/pdf)                                                     | To help save/create a pdf                                   |
-| [**permission_handler**](https://pub.dev/packages/permission_handler)                       | To get storage permissions for opening and saving .md files |
-| [**printing**](https://pub.dev/packages/printing)                                           | To help printing a pdf                                      |
-| [**share_plus**](https://pub.dev/packages/share_plus)                                       | To share markdown files in various formats                  |
-| [**shared_preferences**](https://pub.dev/packages/shared_preferences)                       | To store device preferences for persistence                 |
-| [**url_launcher**](https://pub.dev/packages/url_launcher)                                   | To launch markdown links                                    |
-| [**flutter_lints**](https://pub.dev/packages/flutter_lints)                                 | For linting                                                 |
+The generated APK is written to:
 
-## 🤓 Author
+```text
+build/app/outputs/flutter-apk/app-debug.apk
+```
 
-**[Aditya R](https://github.com/adeeteya)**
+## Project Notes
 
-## 🔖 LICENCE
-Copyright (c) 2023 Aditya R
-[MIT LICENCE](https://github.com/adeeteya/FlutterMarkdownEditor/blob/master/LICENSE)
+This project currently targets Android first. Desktop, web, editing, PDF export, and local file editing features from the original upstream app are not part of the current reader-focused workflow.
 
-## 🙏 Attributions
-<a href="https://www.flaticon.com/free-icons/text-editor" title="text editor icons">Text Editor icons created by Freepik - Flaticon</a>
+## Attribution
+
+This project is based on [FlutterMarkdownEditor](https://github.com/adeeteya/FlutterMarkdownEditor) by Aditya R, licensed under the MIT License.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
