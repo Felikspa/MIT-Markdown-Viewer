@@ -1,44 +1,22 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:htmltopdfwidgets/htmltopdfwidgets.dart' as html2pdf;
-import 'package:markdown/markdown.dart' as md;
 import 'package:markdown_editor/device_preference_notifier.dart';
-import 'package:markdown_editor/l10n/generated/app_localizations.dart';
-import 'package:markdown_editor/widgets/MarkdownBody/custom_checkbox.dart';
+import 'package:markdown_editor/github/github_client.dart';
+import 'package:markdown_editor/github/github_config.dart';
+import 'package:markdown_editor/github/github_config_store.dart';
+import 'package:markdown_editor/github/github_tree.dart';
+import 'package:markdown_editor/github/markdown_cache_store.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/custom_image_config.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/custom_text_node.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/latex_node.dart';
-import 'package:markdown_editor/widgets/MarkdownTextInput/markdown_text_input.dart';
 import 'package:markdown_widget/markdown_widget.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
-
-enum MenuItem {
-  switchTheme,
-  switchView,
-  open,
-  clear,
-  save,
-  saveAs,
-  share,
-  print,
-  donate,
-}
 
 class Home extends StatefulWidget {
   final DevicePreferenceNotifier devicePreferenceNotifier;
+
   const Home({super.key, required this.devicePreferenceNotifier});
 
   @override
@@ -46,802 +24,1413 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  static const _methodChannel = MethodChannel(
-    "com.adeeteya.markdown_editor/channel",
-  );
-  static final RegExp _taskListLinePattern = RegExp(
-    r'^(?:[-+*]|\d+[.)])\s+\[(?: |x|X)\]',
-  );
-  String _filePath = "/storage/emulated/0/Download";
-  String _fileName = 'Markdown';
-  bool _isOpenedFile = false;
-  bool _isPreview = false;
+  final GithubConfigStore _configStore = GithubConfigStore();
+  GithubConfig? _config;
+  GithubConfig? _editingConfig;
+  Object? _loadError;
   bool _isLoading = true;
-  String _inputText = '';
-  final TextEditingController _textEditingController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _getFileContents();
-    });
+    unawaited(_loadConfig());
   }
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    _textEditingController.dispose();
-    super.dispose();
-  }
-
-  void _switchPreview() {
+  Future<void> _loadConfig() async {
     setState(() {
-      _isPreview = !_isPreview;
+      _isLoading = true;
+      _loadError = null;
     });
-  }
-
-  Future<void> _getFileContents() async {
     try {
-      final fileContent = await _methodChannel.invokeMethod<String>(
-        'getFileContent',
-      );
-
-      _inputText = fileContent ?? '';
-      _textEditingController.text = _inputText;
-      setState(() {});
-    } on MissingPluginException {
-      debugPrint("Method channel not available on this platform");
-    } catch (e) {
-      debugPrint("Error getting file content: $e");
-      if (mounted) {
-        await showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(AppLocalizations.of(context)!.error),
-            content: Text(AppLocalizations.of(context)!.unableToOpenFileError),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(AppLocalizations.of(context)!.ok),
-              ),
-            ],
-          ),
-        );
+      final config = await _configStore.load();
+      if (!mounted) {
+        return;
       }
-    } finally {
       setState(() {
+        _config = config;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadError = error;
         _isLoading = false;
       });
     }
   }
 
-  Future<void> _openFilePicker() async {
-    try {
-      final FilePickerResult? result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        initialDirectory:
-            widget.devicePreferenceNotifier.value.defaultFolderPath,
-        allowedExtensions: ['md'],
-      );
-      if (result != null) {
-        _filePath = result.files.single.path ?? "";
-        _fileName = _filePath.substring(
-          _filePath.lastIndexOf("/") + 1,
-          _filePath.lastIndexOf("."),
-        );
-        final File file = File(_filePath);
-        _inputText = await file.readAsString();
-        _textEditingController.text = _inputText;
-        _isOpenedFile = true;
-        setState(() {});
-        final folderPath = _filePath.substring(
-          0,
-          _filePath.lastIndexOf(Platform.pathSeparator),
-        );
-        unawaited(
-          widget.devicePreferenceNotifier.setDefaultFolderPath(folderPath),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        await showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(AppLocalizations.of(context)!.error),
-            content: Text(
-              AppLocalizations.of(context)!.unableToOpenFileFromMenuError,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(AppLocalizations.of(context)!.ok),
-              ),
-            ],
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _clearText() async {
-    if (_inputText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context)!.emptyInputTextContent),
-        ),
-      );
-      return;
-    }
-    FocusScope.of(context).unfocus();
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.of(context)!.clearAllTitle),
-        content: Text(AppLocalizations.of(context)!.clearAllContent),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(AppLocalizations.of(context)!.cancel),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _inputText = "";
-                _textEditingController.clear();
-                _isOpenedFile = false;
-                _filePath = "/storage/emulated/0/Download";
-                _fileName = 'Markdown';
-              });
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(AppLocalizations.of(context)!.yes),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _saveFile() async {
-    if (_inputText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context)!.emptyInputTextContent),
-        ),
-      );
-      return;
-    }
-
-    if (_isOpenedFile) {
-      try {
-        final file = File(_filePath);
-        await file.writeAsString(_inputText);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("File saved successfully")),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text("Error saving file: $e")));
-        }
-      }
-    } else {
-      await _saveFileAs();
-    }
-  }
-
-  Future<void> _saveFileAs() async {
-    if (_inputText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context)!.emptyInputTextContent),
-        ),
-      );
-      return;
-    }
-
-    final filePath = await FilePicker.saveFile(
-      dialogTitle: AppLocalizations.of(context)!.saveFileDialogTitle,
-      fileName: (!kIsWeb && Platform.isWindows) ? null : "$_fileName.md",
-      initialDirectory: widget.devicePreferenceNotifier.value.defaultFolderPath,
-      type: FileType.custom,
-      allowedExtensions: ['md'],
-      bytes: utf8.encode(_inputText),
-    );
-
-    if (filePath != null) {
-      setState(() {
-        _filePath = filePath;
-        _fileName = _filePath.substring(
-          _filePath.lastIndexOf(Platform.pathSeparator) + 1,
-          _filePath.lastIndexOf("."),
-        );
-        _isOpenedFile = true;
-      });
-
-      final folderPath = _filePath.substring(
-        0,
-        _filePath.lastIndexOf(Platform.pathSeparator),
-      );
-      unawaited(
-        widget.devicePreferenceNotifier.setDefaultFolderPath(folderPath),
-      );
-    }
-  }
-
-  Future<Uint8List> _generatePdfBytes() async {
-    final htmlFromMarkdown = md.markdownToHtml(_inputText);
-    final defaultFontFamily = GoogleFonts.notoSans().fontFamily ?? 'Roboto';
-    final printFonts = await _loadPrintFonts();
-    final pdf = pw.Document();
-    final widgets = await html2pdf.HTMLToPdf().convert(
-      htmlFromMarkdown,
-      defaultFontFamily: defaultFontFamily,
-      fontFallback: printFonts.fallbacks,
-      tagStyle: const html2pdf.HtmlTagStyle(
-        codeBlockBackgroundColor: PdfColors.grey300,
-      ),
-      fontResolver: (fontFamily, isBold, isItalic) {
-        if (fontFamily == defaultFontFamily || fontFamily == 'Noto Sans') {
-          if (isBold && isItalic) {
-            return printFonts.boldItalic;
-          } else if (isBold) {
-            return printFonts.bold;
-          } else if (isItalic) {
-            return printFonts.italic;
-          }
-          return printFonts.regular;
-        }
-        return printFonts.regular;
-      },
-    );
-    pdf.addPage(
-      pw.MultiPage(
-        theme: pw.ThemeData.withFont(
-          base: printFonts.regular,
-          bold: printFonts.bold,
-          italic: printFonts.italic,
-          boldItalic: printFonts.boldItalic,
-          fontFallback: printFonts.fallbacks,
-        ),
-        build: (context) => widgets,
-      ),
-    );
-    return pdf.save();
-  }
-
-  Future<void> _printFile() async {
-    if (_inputText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context)!.emptyInputTextContent),
-        ),
-      );
-      return;
-    } else {
-      await Printing.layoutPdf(
-        usePrinterSettings: true,
-        onLayout: (format) async => _generatePdfBytes(),
-      );
-    }
-  }
-
-  Future<void> _share() async {
-    if (_inputText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context)!.emptyInputTextContent),
-        ),
-      );
-      return;
-    }
-
-    if (kIsWeb) {
-      await SharePlus.instance.share(ShareParams(text: _inputText));
-      return;
-    }
-
-    final String? format = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.of(context)!.shareAsDialogTitle),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.text_snippet),
-              title: Text(AppLocalizations.of(context)!.plainText),
-              onTap: () => Navigator.pop(context, 'plain'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.code),
-              title: Text(AppLocalizations.of(context)!.markdown),
-              onTap: () => Navigator.pop(context, 'md'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.picture_as_pdf),
-              title: Text(AppLocalizations.of(context)!.pdf),
-              onTap: () => Navigator.pop(context, 'pdf'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (format == null) return;
-
-    if (format == 'plain') {
-      await SharePlus.instance.share(ShareParams(text: _inputText));
-    } else {
-      final tempDir = await getTemporaryDirectory();
-      final baseName = _fileName.split(Platform.pathSeparator).last;
-      if (format == 'md') {
-        final file = File('${tempDir.path}/$baseName.md');
-        await file.writeAsString(_inputText);
-        await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
-      } else if (format == 'pdf') {
-        final bytes = await _generatePdfBytes();
-        final file = File('${tempDir.path}/$baseName.pdf');
-        await file.writeAsBytes(bytes);
-        await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
-      }
-    }
-  }
-
-  Future<void> _clearFileContent() async {
-    try {
-      await _methodChannel.invokeMethod<void>('clearFileContent');
-    } on MissingPluginException {
-      debugPrint("Method channel not available on this platform");
-    } catch (e) {
-      debugPrint("Error clearing file content: $e");
-    }
-  }
-
-  Future<bool> _showExitConfirmationDialog() async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: Text(AppLocalizations.of(context)!.confirmAppExitTitle),
-              content: Text(
-                AppLocalizations.of(context)!.confirmAppExitContent,
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: Text(AppLocalizations.of(context)!.cancel),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  style: TextButton.styleFrom(foregroundColor: Colors.red),
-                  child: Text(AppLocalizations.of(context)!.yes),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false; // Return false if dialog is dismissed
-  }
-
-  Widget _markdownPreviewWidget() {
-    final isDark = widget.devicePreferenceNotifier.value.isDarkMode;
-    final config = isDark
-        ? MarkdownConfig.darkConfig
-        : MarkdownConfig.defaultConfig;
-    int checkboxIndex = -1;
-    return Card(
-      child: SizedBox(
-        height: double.infinity,
-        width: double.infinity,
-        child: Scrollbar(
-          interactive: true,
-          controller: _scrollController,
-          radius: const Radius.circular(8),
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            padding: const EdgeInsets.all(8),
-            child: MarkdownBlock(
-              data: _inputText,
-              generator: MarkdownGenerator(
-                generators: [latexGenerator],
-                inlineSyntaxList: [LatexSyntax()],
-                textGenerator: (node, config, visitor) =>
-                    CustomTextNode(node.textContent, config, visitor),
-                richTextBuilder: Text.rich,
-              ),
-              config: config.copy(
-                configs: [
-                  CustomImgConfig(),
-                  CheckBoxConfig(
-                    builder: (checked) {
-                      checkboxIndex++;
-                      final currentIndex = checkboxIndex;
-                      return CustomCheckbox(
-                        key: ValueKey('markdown-task-checkbox-$currentIndex'),
-                        checked: checked,
-                        onChanged: () => _toggleTaskListCheckbox(currentIndex),
-                      );
-                    },
-                  ),
-                  TableConfig(
-                    wrapper: (tableWidget) => SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: tableWidget,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _splitView() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 0, 4, 5),
-      child: Column(
-        children: [
-          Expanded(child: _markdownPreviewWidget()),
-          const SizedBox(height: 5),
-          MarkdownTextInput(
-            (String value) {
-              setState(() {
-                _inputText = value;
-              });
-            },
-            _inputText,
-            controller: _textEditingController,
-            maxLines: 8,
-            label: AppLocalizations.of(context)!.markdownTextInputLabel,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _fullView() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-      child: GestureDetector(
-        onHorizontalDragEnd: (drag) {
-          if (drag.primaryVelocity == null) {
-            return;
-          }
-          setState(() {
-            _isPreview = !_isPreview;
-          });
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            IgnorePointer(
-              ignoring: !_isPreview,
-              child: AnimatedOpacity(
-                opacity: _isPreview ? 1 : 0,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                child: _markdownPreviewWidget(),
-              ),
-            ),
-            IgnorePointer(
-              ignoring: _isPreview,
-              child: AnimatedOpacity(
-                opacity: _isPreview ? 0 : 1,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                child: MarkdownTextInput(
-                  (String value) {
-                    setState(() {
-                      _inputText = value;
-                    });
-                  },
-                  _inputText,
-                  controller: _textEditingController,
-                  label: AppLocalizations.of(context)!.markdownTextInputLabel,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<int> _taskListMarkerPositions(String text) {
-    final positions = <int>[];
-    final lines = text.split('\n');
-    var offset = 0;
-
-    for (final line in lines) {
-      var sanitizedLine = line;
-      if (sanitizedLine.endsWith('\r')) {
-        sanitizedLine = sanitizedLine.substring(0, sanitizedLine.length - 1);
-      }
-      sanitizedLine = sanitizedLine.trimLeft();
-      while (sanitizedLine.startsWith('>')) {
-        sanitizedLine = sanitizedLine.substring(1).trimLeft();
-      }
-      if (_taskListLinePattern.hasMatch(sanitizedLine)) {
-        final bracketIndex = line.indexOf('[');
-        if (bracketIndex != -1) {
-          positions.add(offset + bracketIndex);
-        }
-      }
-      offset += line.length + 1;
-    }
-
-    return positions;
-  }
-
-  void _toggleTaskListCheckbox(int index) {
-    final markerPositions = _taskListMarkerPositions(_inputText);
-    if (index < 0 || index >= markerPositions.length) {
-      return;
-    }
-    final markerStart = markerPositions[index];
-    if (markerStart + 2 >= _inputText.length) {
-      return;
-    }
-    final currentState = _inputText[markerStart + 1];
-    final newState = (currentState == 'x' || currentState == 'X') ? ' ' : 'x';
-    final updatedText = _inputText.replaceRange(
-      markerStart,
-      markerStart + 3,
-      '[$newState]',
-    );
-    final currentSelection = _textEditingController.selection;
-    final collapsedSelection = currentSelection.isValid
-        ? TextSelection(
-            baseOffset: math.min(
-              currentSelection.baseOffset,
-              updatedText.length,
-            ),
-            extentOffset: math.min(
-              currentSelection.extentOffset,
-              updatedText.length,
-            ),
-          )
-        : TextSelection.collapsed(offset: updatedText.length);
+  Future<void> _saveConfig(GithubConfig config) async {
+    await _configStore.save(config);
     setState(() {
-      _inputText = updatedText;
-      _textEditingController.value = TextEditingValue(
-        text: updatedText,
-        selection: collapsedSelection,
-      );
+      _config = config.trimmed();
+      _editingConfig = null;
     });
+  }
+
+  Future<void> _openSettings() async {
+    final config = _config;
+    if (config == null) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => _SettingsScreen(
+          config: config,
+          devicePreferenceNotifier: widget.devicePreferenceNotifier,
+          onSaveConfig: _saveConfig,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => FocusScope.of(context).unfocus(),
-      child: PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) async {
-          if (didPop) {
-            return;
-          }
-          final bool shouldPop = await _showExitConfirmationDialog();
-          if (shouldPop && context.mounted) {
-            await _clearFileContent();
-            await SystemNavigator.pop(animated: true);
-          }
-        },
-        child: Scaffold(
-          appBar: AppBar(
-            elevation: 0,
-            title: Text(AppLocalizations.of(context)!.appTitle),
-            actions: [
-              if (!widget.devicePreferenceNotifier.value.isSplitLayout)
-                IconButton(
-                  onPressed: _switchPreview,
-                  tooltip: AppLocalizations.of(context)!.previewToolTip,
-                  icon: Icon(
-                    _isPreview ? Icons.visibility_off : Icons.visibility,
-                  ),
-                ),
-              PopupMenuButton<MenuItem>(
-                onSelected: (selectedMenuItem) async {
-                  switch (selectedMenuItem) {
-                    case MenuItem.open:
-                      await _openFilePicker();
-                      break;
-                    case MenuItem.save:
-                      await _saveFile();
-                      break;
-                    case MenuItem.saveAs:
-                      await _saveFileAs();
-                      break;
-                    case MenuItem.share:
-                      await _share();
-                      break;
-                    case MenuItem.clear:
-                      await _clearText();
-                      break;
-                    case MenuItem.print:
-                      await _printFile();
-                      break;
-                    case MenuItem.switchView:
-                      await widget.devicePreferenceNotifier.toggleLayout();
-                      break;
-                    case MenuItem.switchTheme:
-                      await widget.devicePreferenceNotifier.toggleTheme();
-                      break;
-                    case MenuItem.donate:
-                      await launchUrl(
-                        Uri.parse("https://buymeacoffee.com/adeeteya"),
-                        mode: LaunchMode.externalApplication,
-                      );
-                      break;
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: MenuItem.open,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.file_open),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.openFileMenuItem),
-                      ],
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator.adaptive()),
+      );
+    }
+
+    if (_loadError != null) {
+      return _ErrorScaffold(
+        title: 'Markdown Reader',
+        message: _loadError.toString(),
+        onRetry: _loadConfig,
+      );
+    }
+
+    final config = _config;
+    if (config == null) {
+      return _GithubConfigScreen(
+        initialConfig: _editingConfig,
+        onSave: _saveConfig,
+      );
+    }
+
+    return _RepositoryScreen(
+      config: config,
+      devicePreferenceNotifier: widget.devicePreferenceNotifier,
+      onSettingsPressed: _openSettings,
+    );
+  }
+}
+
+class _GithubConfigScreen extends StatefulWidget {
+  final GithubConfig? initialConfig;
+  final Future<void> Function(GithubConfig config) onSave;
+
+  const _GithubConfigScreen({
+    required this.initialConfig,
+    required this.onSave,
+  });
+
+  @override
+  State<_GithubConfigScreen> createState() => _GithubConfigScreenState();
+}
+
+class _GithubConfigScreenState extends State<_GithubConfigScreen> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  late final TextEditingController _repositoryUrlController;
+  late final TextEditingController _branchController;
+  late final TextEditingController _tokenController;
+  bool _isSaving = false;
+  bool _obscureToken = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final config = widget.initialConfig;
+    _repositoryUrlController = TextEditingController(
+      text: config?.repositoryUrl ?? '',
+    );
+    _branchController = TextEditingController(text: config?.branch ?? 'main');
+    _tokenController = TextEditingController(text: config?.token ?? '');
+  }
+
+  @override
+  void dispose() {
+    _repositoryUrlController.dispose();
+    _branchController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final form = _formKey.currentState;
+    if (form == null || !form.validate()) {
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.onSave(
+        GithubConfig.fromRepositoryUrl(
+          repositoryUrl: _repositoryUrlController.text,
+          branch: _branchController.text,
+          token: _tokenController.text,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = error.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  String? _requiredValidator(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Required';
+    }
+    return null;
+  }
+
+  String? _repositoryUrlValidator(String? value) {
+    final requiredError = _requiredValidator(value);
+    if (requiredError != null) {
+      return requiredError;
+    }
+    try {
+      GithubRepository.parse(value!);
+      return null;
+    } on FormatException catch (error) {
+      return error.message;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('GitHub Repository')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextFormField(
+                    controller: _repositoryUrlController,
+                    decoration: const InputDecoration(
+                      labelText: 'GitHub URL',
+                      prefixIcon: Icon(Icons.link),
+                      border: OutlineInputBorder(),
                     ),
+                    textInputAction: TextInputAction.next,
+                    keyboardType: TextInputType.url,
+                    validator: _repositoryUrlValidator,
                   ),
-                  PopupMenuItem(
-                    value: MenuItem.save,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.save),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.save),
-                      ],
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _branchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Branch',
+                      prefixIcon: Icon(Icons.alt_route),
+                      border: OutlineInputBorder(),
                     ),
+                    textInputAction: TextInputAction.next,
+                    validator: _requiredValidator,
                   ),
-                  PopupMenuItem(
-                    value: MenuItem.saveAs,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.save_as),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.saveAs),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: MenuItem.share,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.share),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.share),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: MenuItem.clear,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.clear_all),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.clear),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: MenuItem.print,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.print),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.print),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: MenuItem.switchView,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.rotate_left),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.switchViewMenuItem),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: MenuItem.switchTheme,
-                    child: Row(
-                      children: [
-                        Icon(
-                          widget.devicePreferenceNotifier.value.isDarkMode
-                              ? Icons.dark_mode
-                              : Icons.light_mode,
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _tokenController,
+                    decoration: InputDecoration(
+                      labelText: 'GitHub Token',
+                      prefixIcon: const Icon(Icons.key),
+                      suffixIcon: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _obscureToken = !_obscureToken;
+                          });
+                        },
+                        tooltip: _obscureToken ? 'Show token' : 'Hide token',
+                        icon: Icon(
+                          _obscureToken
+                              ? Icons.visibility
+                              : Icons.visibility_off,
                         ),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.switchThemeMenuItem),
-                      ],
+                      ),
+                      border: const OutlineInputBorder(),
                     ),
+                    obscureText: _obscureToken,
+                    textInputAction: TextInputAction.done,
+                    validator: _requiredValidator,
+                    onFieldSubmitted: (_) => _submit(),
                   ),
-                  PopupMenuItem(
-                    value: MenuItem.donate,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.volunteer_activism),
-                        const SizedBox(width: 8),
-                        Text(AppLocalizations.of(context)!.donate),
-                      ],
+                  if (_error != null) ...[
+                    const SizedBox(height: 14),
+                    Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
+                  ],
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: _isSaving ? null : _submit,
+                    icon: _isSaving
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check),
+                    label: const Text('Save'),
                   ),
                 ],
               ),
-            ],
-          ),
-          body: _isLoading
-              ? const Center(child: CircularProgressIndicator.adaptive())
-              : (widget.devicePreferenceNotifier.value.isSplitLayout)
-              ? _splitView()
-              : _fullView(),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _PrintFonts {
-  const _PrintFonts({
-    required this.regular,
-    required this.bold,
-    required this.italic,
-    required this.boldItalic,
-    required this.fallbacks,
+class _SettingsScreen extends StatefulWidget {
+  final GithubConfig config;
+  final DevicePreferenceNotifier devicePreferenceNotifier;
+  final Future<void> Function(GithubConfig config) onSaveConfig;
+
+  const _SettingsScreen({
+    required this.config,
+    required this.devicePreferenceNotifier,
+    required this.onSaveConfig,
   });
 
-  final pw.Font regular;
-  final pw.Font bold;
-  final pw.Font italic;
-  final pw.Font boldItalic;
-  final List<pw.Font> fallbacks;
+  @override
+  State<_SettingsScreen> createState() => _SettingsScreenState();
 }
 
-Future<_PrintFonts>? _printFontsFuture;
+class _SettingsScreenState extends State<_SettingsScreen> {
+  late GithubConfig _config;
+  late double _readerFontSize;
 
-Future<_PrintFonts> _loadPrintFonts() {
-  return _printFontsFuture ??= (() async {
-    try {
-      final regular = await PdfGoogleFonts.notoSansRegular();
-      final bold = await PdfGoogleFonts.notoSansBold();
-      final italic = await PdfGoogleFonts.notoSansItalic();
-      final boldItalic = await PdfGoogleFonts.notoSansBoldItalic();
+  @override
+  void initState() {
+    super.initState();
+    _config = widget.config;
+    _readerFontSize = widget.devicePreferenceNotifier.value.readerFontSize
+        .clamp(12, 28);
+  }
 
-      final fallbackFonts = await Future.wait<pw.Font>([
-        PdfGoogleFonts.notoSansSymbols2Regular(),
-        PdfGoogleFonts.notoSansMathRegular(),
-        PdfGoogleFonts.notoSansJPRegular(),
-        PdfGoogleFonts.notoSansKRRegular(),
-        PdfGoogleFonts.notoSansSCRegular(),
-        PdfGoogleFonts.notoSansArabicRegular(),
-        PdfGoogleFonts.notoSansHebrewRegular(),
-        PdfGoogleFonts.notoSansDevanagariRegular(),
-        PdfGoogleFonts.notoSansThaiLoopedRegular(),
-        PdfGoogleFonts.notoColorEmoji(),
-      ]);
+  Future<void> _editRepository() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => _GithubConfigScreen(
+          initialConfig: _config,
+          onSave: (config) async {
+            await widget.onSaveConfig(config);
+            if (!mounted) {
+              return;
+            }
+            setState(() {
+              _config = config.trimmed();
+            });
+            if (context.mounted) {
+              Navigator.of(context).pop();
+            }
+          },
+        ),
+      ),
+    );
+  }
 
-      return _PrintFonts(
-        regular: regular,
-        bold: bold,
-        italic: italic,
-        boldItalic: boldItalic,
-        fallbacks: fallbackFonts,
-      );
-    } catch (_) {
-      _printFontsFuture = null;
-      rethrow;
+  Future<void> _setDarkMode(bool enabled) async {
+    await widget.devicePreferenceNotifier.setDarkMode(enabled);
+  }
+
+  void _setReaderFontSize(double value) {
+    setState(() {
+      _readerFontSize = value;
+    });
+    unawaited(widget.devicePreferenceNotifier.setReaderFontSize(value));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ValueListenableBuilder<DevicePreferences>(
+      valueListenable: widget.devicePreferenceNotifier,
+      builder: (context, preferences, _) {
+        return Scaffold(
+          appBar: AppBar(title: const Text('Settings')),
+          body: SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Text(
+                    'Repository',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.link),
+                  title: Text('${_config.owner}/${_config.repo}'),
+                  subtitle: Text('${_config.repositoryUrl}\n${_config.branch}'),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _editRepository,
+                ),
+                const Divider(height: 28),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text(
+                    'Reading',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                SwitchListTile(
+                  secondary: Icon(
+                    preferences.isDarkMode ? Icons.dark_mode : Icons.light_mode,
+                  ),
+                  title: const Text('Dark mode'),
+                  value: preferences.isDarkMode,
+                  onChanged: (value) => unawaited(_setDarkMode(value)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.format_size),
+                  title: const Text('Text size'),
+                  subtitle: Slider(
+                    value: _readerFontSize,
+                    min: 12,
+                    max: 28,
+                    divisions: 16,
+                    label: _readerFontSize.round().toString(),
+                    onChanged: _setReaderFontSize,
+                  ),
+                  trailing: SizedBox(
+                    width: 44,
+                    child: Text(
+                      _readerFontSize.round().toString(),
+                      textAlign: TextAlign.end,
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RepositoryScreen extends StatefulWidget {
+  final GithubConfig config;
+  final DevicePreferenceNotifier devicePreferenceNotifier;
+  final Future<void> Function() onSettingsPressed;
+
+  const _RepositoryScreen({
+    required this.config,
+    required this.devicePreferenceNotifier,
+    required this.onSettingsPressed,
+  });
+
+  @override
+  State<_RepositoryScreen> createState() => _RepositoryScreenState();
+}
+
+class _RepositoryScreenState extends State<_RepositoryScreen> {
+  late Future<GithubDirectoryNode> _treeFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _treeFuture = _fetchTree();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RepositoryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.config != widget.config) {
+      _treeFuture = _fetchTree();
     }
-  })();
+  }
+
+  Future<GithubDirectoryNode> _fetchTree() async {
+    final client = GithubClient(config: widget.config);
+    final entries = await client.fetchMarkdownTree();
+    return GithubDirectoryNode.fromMarkdownEntries(entries);
+  }
+
+  void _refresh() {
+    setState(() {
+      _treeFuture = _fetchTree();
+    });
+  }
+
+  Future<void> _openFile(
+    GithubMarkdownFile file,
+    List<GithubMarkdownFile> files,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => _ReaderScreen(
+          config: widget.config,
+          file: file,
+          files: files,
+          devicePreferenceNotifier: widget.devicePreferenceNotifier,
+          onSettingsPressed: widget.onSettingsPressed,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${widget.config.owner}/${widget.config.repo}'),
+        actions: [
+          IconButton(
+            onPressed: _refresh,
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            onPressed: widget.onSettingsPressed,
+            tooltip: 'Settings',
+            icon: const Icon(Icons.tune),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: FutureBuilder<GithubDirectoryNode>(
+          future: _treeFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator.adaptive());
+            }
+            if (snapshot.hasError) {
+              return _ErrorView(
+                message: snapshot.error.toString(),
+                onRetry: _refresh,
+              );
+            }
+            final root = snapshot.requireData;
+            if (root.directories.isEmpty && root.files.isEmpty) {
+              return const Center(child: Text('No Markdown files found.'));
+            }
+            final files = root.flattenFiles();
+            return ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                for (final directory in root.directories.values)
+                  _DirectoryTile(
+                    directory: directory,
+                    onOpenFile: (file) => _openFile(file, files),
+                  ),
+                for (final file in root.files)
+                  _FileTile(
+                    file: file,
+                    onOpenFile: (file) => _openFile(file, files),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _DirectoryTile extends StatelessWidget {
+  final GithubDirectoryNode directory;
+  final Future<void> Function(GithubMarkdownFile file) onOpenFile;
+
+  const _DirectoryTile({required this.directory, required this.onOpenFile});
+
+  @override
+  Widget build(BuildContext context) {
+    return ExpansionTile(
+      leading: const Icon(Icons.folder_outlined),
+      title: Text(directory.name),
+      childrenPadding: const EdgeInsets.only(left: 16),
+      children: [
+        for (final child in directory.directories.values)
+          _DirectoryTile(directory: child, onOpenFile: onOpenFile),
+        for (final file in directory.files)
+          _FileTile(file: file, onOpenFile: onOpenFile),
+      ],
+    );
+  }
+}
+
+class _FileTile extends StatelessWidget {
+  final GithubMarkdownFile file;
+  final Future<void> Function(GithubMarkdownFile file) onOpenFile;
+
+  const _FileTile({required this.file, required this.onOpenFile});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      minVerticalPadding: 12,
+      leading: const Icon(Icons.article_outlined),
+      title: Text(file.name),
+      subtitle: Text(file.path),
+      onTap: () => onOpenFile(file),
+    );
+  }
+}
+
+class _ReaderScreen extends StatefulWidget {
+  final GithubConfig config;
+  final GithubMarkdownFile file;
+  final List<GithubMarkdownFile> files;
+  final DevicePreferenceNotifier devicePreferenceNotifier;
+  final Future<void> Function() onSettingsPressed;
+
+  const _ReaderScreen({
+    required this.config,
+    required this.file,
+    required this.files,
+    required this.devicePreferenceNotifier,
+    required this.onSettingsPressed,
+  });
+
+  @override
+  State<_ReaderScreen> createState() => _ReaderScreenState();
+}
+
+class _ReaderScreenState extends State<_ReaderScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final ScrollController _scrollController = ScrollController();
+  final MarkdownCacheStore _cacheStore = MarkdownCacheStore();
+  late Future<_ReaderContent> _contentFuture;
+  bool _isTopBarVisible = false;
+  String? _cachedContent;
+  double? _cachedFontSize;
+  bool? _cachedIsDark;
+  _ReaderRenderModel? _cachedRenderModel;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
+    );
+    _contentFuture = _fetchContent();
+  }
+
+  @override
+  void dispose() {
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<_ReaderContent> _fetchContent() async {
+    try {
+      final content = await GithubClient(
+        config: widget.config,
+      ).fetchMarkdownFile(widget.file.path);
+      await _cacheStore.write(
+        config: widget.config,
+        path: widget.file.path,
+        content: content,
+      );
+      return _ReaderContent(content: content, isCached: false);
+    } catch (_) {
+      final cachedContent = await _cacheStore.read(
+        config: widget.config,
+        path: widget.file.path,
+      );
+      if (cachedContent == null) {
+        rethrow;
+      }
+      return _ReaderContent(content: cachedContent, isCached: true);
+    }
+  }
+
+  void _refresh() {
+    setState(() {
+      _contentFuture = _fetchContent();
+    });
+  }
+
+  Future<void> _toggleTheme() async {
+    _clearMarkdownCache();
+    await widget.devicePreferenceNotifier.toggleTheme();
+  }
+
+  void _clearMarkdownCache() {
+    _cachedContent = null;
+    _cachedFontSize = null;
+    _cachedIsDark = null;
+    _cachedRenderModel = null;
+  }
+
+  void _setTopBarVisible(bool visible) {
+    if (_isTopBarVisible == visible) {
+      return;
+    }
+    setState(() {
+      _isTopBarVisible = visible;
+    });
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(
+        visible ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
+      ),
+    );
+  }
+
+  bool _handleScrollNotification(UserScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+    switch (notification.direction) {
+      case ScrollDirection.reverse:
+        _setTopBarVisible(false);
+        break;
+      case ScrollDirection.forward:
+        _setTopBarVisible(true);
+        break;
+      case ScrollDirection.idle:
+        break;
+    }
+    return false;
+  }
+
+  String _resolveImageUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri != null && uri.hasScheme) {
+      return url;
+    }
+    if (url.startsWith('#')) {
+      return url;
+    }
+
+    final baseParts = widget.file.path.split('/')..removeLast();
+    final imageParts = url.startsWith('/')
+        ? url.substring(1).split('/')
+        : [...baseParts, ...url.split('/')];
+    final normalizedParts = <String>[];
+    for (final part in imageParts) {
+      if (part.isEmpty || part == '.') {
+        continue;
+      }
+      if (part == '..') {
+        if (normalizedParts.isEmpty) {
+          throw ArgumentError('Image path leaves the repository root: $url');
+        }
+        normalizedParts.removeLast();
+      } else {
+        normalizedParts.add(part);
+      }
+    }
+    final imagePath = normalizedParts.join('/');
+    return Uri.https(
+      'raw.githubusercontent.com',
+      '/${widget.config.owner}/${widget.config.repo}/${widget.config.branch}/$imagePath',
+    ).toString();
+  }
+
+  int get _currentFileIndex {
+    return widget.files.indexWhere((file) => file.path == widget.file.path);
+  }
+
+  GithubMarkdownFile? get _previousFile {
+    final index = _currentFileIndex;
+    if (index <= 0) {
+      return null;
+    }
+    return widget.files[index - 1];
+  }
+
+  GithubMarkdownFile? get _nextFile {
+    final index = _currentFileIndex;
+    if (index == -1 || index >= widget.files.length - 1) {
+      return null;
+    }
+    return widget.files[index + 1];
+  }
+
+  Future<void> _openSibling(
+    GithubMarkdownFile file, {
+    required bool isPrevious,
+  }) async {
+    await Navigator.of(context).pushReplacement(
+      PageRouteBuilder<void>(
+        pageBuilder: (context, animation, secondaryAnimation) => _ReaderScreen(
+          config: widget.config,
+          file: file,
+          files: widget.files,
+          devicePreferenceNotifier: widget.devicePreferenceNotifier,
+          onSettingsPressed: widget.onSettingsPressed,
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final begin = isPrevious ? const Offset(-1, 0) : const Offset(1, 0);
+          final tween = Tween<Offset>(
+            begin: begin,
+            end: Offset.zero,
+          ).chain(CurveTween(curve: Curves.easeOutCubic));
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: child,
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 320),
+      ),
+    );
+  }
+
+  void _jumpToHeading(_ReaderHeading heading) {
+    _setTopBarVisible(false);
+    unawaited(Navigator.of(context).maybePop());
+    final key = _cachedRenderModel?.itemKeys[heading.widgetIndex];
+    final keyContext = key?.currentContext;
+    if (keyContext != null) {
+      unawaited(
+        Scrollable.ensureVisible(
+          keyContext,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+  }
+
+  Widget _markdownView(String content) {
+    final theme = Theme.of(context);
+    final isDark = widget.devicePreferenceNotifier.value.isDarkMode;
+    final fontSize = widget.devicePreferenceNotifier.value.readerFontSize;
+    final textColor = isDark
+        ? const Color(0xFFEDEFF2)
+        : theme.colorScheme.onSurface;
+    final markdownConfig =
+        (isDark ? MarkdownConfig.darkConfig : MarkdownConfig.defaultConfig)
+            .copy(
+              configs: [
+                PConfig(
+                  textStyle: TextStyle(
+                    fontSize: fontSize,
+                    height: 1.65,
+                    color: textColor,
+                  ),
+                ),
+                CustomImgConfig(
+                  headers: {'Authorization': 'Bearer ${widget.config.token}'},
+                  transformUrl: _resolveImageUrl,
+                ),
+                TableConfig(
+                  wrapper: (tableWidget) => SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: tableWidget,
+                  ),
+                ),
+              ],
+            );
+    final cachedRenderModel = _cachedRenderModel;
+    final renderModel =
+        cachedRenderModel != null &&
+            _cachedContent == content &&
+            _cachedFontSize == fontSize &&
+            _cachedIsDark == isDark
+        ? cachedRenderModel
+        : _ReaderRenderModel.fromMarkdown(
+            content: content,
+            config: markdownConfig,
+            generator: MarkdownGenerator(
+              generators: [latexGenerator],
+              inlineSyntaxList: [LatexSyntax()],
+              textGenerator: (node, config, visitor) =>
+                  CustomTextNode(node.textContent, config, visitor),
+              richTextBuilder: Text.rich,
+            ),
+          );
+    _cachedContent = content;
+    _cachedFontSize = fontSize;
+    _cachedIsDark = isDark;
+    _cachedRenderModel = renderModel;
+
+    return NotificationListener<UserScrollNotification>(
+      onNotification: _handleScrollNotification,
+      child: Scrollbar(
+        controller: _scrollController,
+        interactive: true,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _setTopBarVisible(false),
+          child: ListView.builder(
+            controller: _scrollController,
+            cacheExtent: 2400,
+            padding: EdgeInsets.fromLTRB(
+              18,
+              12,
+              18,
+              MediaQuery.paddingOf(context).bottom + kToolbarHeight + 28,
+            ),
+            itemCount: renderModel.widgets.length,
+            itemBuilder: (context, index) => _ReaderMarkdownItem(
+              key: renderModel.itemKeys[index],
+              child: renderModel.widgets[index],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.devicePreferenceNotifier.value.isDarkMode;
+    final backgroundColor = isDark
+        ? Colors.black
+        : Theme.of(context).colorScheme.surface;
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: backgroundColor,
+      drawerEdgeDragWidth: 108,
+      onDrawerChanged: (isOpened) {
+        if (isOpened) {
+          _setTopBarVisible(false);
+        }
+      },
+      drawer: _ReaderTocDrawer(
+        headings: _cachedRenderModel?.headings ?? const [],
+        onHeadingSelected: _jumpToHeading,
+      ),
+      body: ColoredBox(
+        color: backgroundColor,
+        child: Stack(
+          children: [
+            SafeArea(
+              top: false,
+              child: FutureBuilder<_ReaderContent>(
+                future: _contentFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Center(
+                      child: CircularProgressIndicator.adaptive(),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return _ErrorView(
+                      message: snapshot.error.toString(),
+                      onRetry: _refresh,
+                    );
+                  }
+                  return _markdownView(snapshot.requireData.content);
+                },
+              ),
+            ),
+            _ReaderTopBar(
+              visible: _isTopBarVisible,
+              title: widget.file.name,
+              isDark: isDark,
+              onToggleTheme: _toggleTheme,
+              onRefresh: _refresh,
+              onOpenSettings: widget.onSettingsPressed,
+            ),
+            _ReaderBottomBar(
+              visible: _isTopBarVisible,
+              previousFile: _previousFile,
+              nextFile: _nextFile,
+              onPrevious: _previousFile == null
+                  ? null
+                  : () => unawaited(
+                      _openSibling(_previousFile!, isPrevious: true),
+                    ),
+              onNext: _nextFile == null
+                  ? null
+                  : () =>
+                        unawaited(_openSibling(_nextFile!, isPrevious: false)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderContent {
+  const _ReaderContent({required this.content, required this.isCached});
+
+  final String content;
+  final bool isCached;
+}
+
+class _ReaderRenderModel {
+  const _ReaderRenderModel({
+    required this.widgets,
+    required this.itemKeys,
+    required this.headings,
+  });
+
+  factory _ReaderRenderModel.fromMarkdown({
+    required String content,
+    required MarkdownConfig config,
+    required MarkdownGenerator generator,
+  }) {
+    var tocList = <Toc>[];
+    final widgets = generator.buildWidgets(
+      content,
+      config: config,
+      onTocList: (list) {
+        tocList = list;
+      },
+    );
+    final itemKeys = List<GlobalKey>.generate(
+      widgets.length,
+      (index) => GlobalKey(),
+    );
+    final markdownHeadings = _extractMarkdownHeadings(content);
+    final headings = [
+      for (var index = 0; index < tocList.length; index++)
+        _ReaderHeading.fromToc(
+          tocList[index],
+          markdownHeading: index < markdownHeadings.length
+              ? markdownHeadings[index]
+              : null,
+        ),
+    ];
+    return _ReaderRenderModel(
+      widgets: widgets,
+      itemKeys: itemKeys,
+      headings: headings,
+    );
+  }
+
+  static List<_MarkdownHeading> _extractMarkdownHeadings(String content) {
+    final headings = <_MarkdownHeading>[];
+    final lines = content.split('\n');
+    var isInFence = false;
+    for (var index = 0; index < lines.length; index++) {
+      final line = lines[index].trimRight();
+      if (RegExp(r'^\s{0,3}(```|~~~)').hasMatch(line)) {
+        isInFence = !isInFence;
+        continue;
+      }
+      if (isInFence) {
+        continue;
+      }
+      final atxMatch = RegExp(
+        r'^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$',
+      ).firstMatch(line);
+      if (atxMatch != null) {
+        headings.add(
+          _MarkdownHeading(
+            title: _cleanHeadingText(atxMatch.group(2)!),
+            level: atxMatch.group(1)!.length,
+          ),
+        );
+        continue;
+      }
+
+      if (index + 1 >= lines.length) {
+        continue;
+      }
+      final marker = lines[index + 1].trim();
+      if (line.trim().isEmpty || !RegExp(r'^(=+|-+)$').hasMatch(marker)) {
+        continue;
+      }
+      headings.add(
+        _MarkdownHeading(
+          title: _cleanHeadingText(line.trim()),
+          level: marker.startsWith('=') ? 1 : 2,
+        ),
+      );
+    }
+    return headings;
+  }
+
+  static String _cleanHeadingText(String value) {
+    return value
+        .replaceAllMapped(
+          RegExp(r'!\[([^\]]*)\]\([^)]+\)'),
+          (match) => match.group(1) ?? '',
+        )
+        .replaceAllMapped(
+          RegExp(r'\[([^\]]+)\]\([^)]+\)'),
+          (match) => match.group(1) ?? '',
+        )
+        .replaceAll(RegExp(r'[`*_~]'), '')
+        .replaceAll(RegExp(r'<[^>]+>'), '')
+        .trim();
+  }
+
+  final List<Widget> widgets;
+  final List<GlobalKey> itemKeys;
+  final List<_ReaderHeading> headings;
+}
+
+class _MarkdownHeading {
+  const _MarkdownHeading({required this.title, required this.level});
+
+  final String title;
+  final int level;
+}
+
+class _ReaderHeading {
+  const _ReaderHeading({
+    required this.title,
+    required this.level,
+    required this.widgetIndex,
+  });
+
+  factory _ReaderHeading.fromToc(
+    Toc toc, {
+    required _MarkdownHeading? markdownHeading,
+  }) {
+    final tag = toc.node.headingConfig.tag;
+    final level = int.tryParse(tag.replaceFirst('h', '')) ?? 1;
+    return _ReaderHeading(
+      title: markdownHeading?.title ?? toc.node.build().toPlainText(),
+      level: (markdownHeading?.level ?? level).clamp(1, 6),
+      widgetIndex: toc.widgetIndex,
+    );
+  }
+
+  final String title;
+  final int level;
+  final int widgetIndex;
+}
+
+class _ReaderMarkdownItem extends StatefulWidget {
+  final Widget child;
+
+  const _ReaderMarkdownItem({super.key, required this.child});
+
+  @override
+  State<_ReaderMarkdownItem> createState() => _ReaderMarkdownItemState();
+}
+
+class _ReaderMarkdownItemState extends State<_ReaderMarkdownItem>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return RepaintBoundary(child: widget.child);
+  }
+}
+
+class _ReaderTocDrawer extends StatelessWidget {
+  final List<_ReaderHeading> headings;
+  final ValueChanged<_ReaderHeading> onHeadingSelected;
+
+  const _ReaderTocDrawer({
+    required this.headings,
+    required this.onHeadingSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+              child: Text(
+                'Contents',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: headings.isEmpty
+                  ? const Center(child: Text('No headings found.'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: headings.length,
+                      itemBuilder: (context, index) {
+                        final heading = headings[index];
+                        return ListTile(
+                          minVerticalPadding: 10,
+                          contentPadding: EdgeInsets.only(
+                            left: 16 + (heading.level - 1) * 14,
+                            right: 16,
+                          ),
+                          title: Text(
+                            heading.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => onHeadingSelected(heading),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderTopBar extends StatelessWidget {
+  final bool visible;
+  final String title;
+  final bool isDark;
+  final VoidCallback onToggleTheme;
+  final VoidCallback onRefresh;
+  final Future<void> Function() onOpenSettings;
+
+  const _ReaderTopBar({
+    required this.visible,
+    required this.title,
+    required this.isDark,
+    required this.onToggleTheme,
+    required this.onRefresh,
+    required this.onOpenSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final topPadding = MediaQuery.paddingOf(context).top;
+    final backgroundColor = isDark
+        ? const Color(0xF2050506)
+        : theme.colorScheme.surface.withValues(alpha: 0.96);
+    final foregroundColor = isDark
+        ? const Color(0xFFEDEFF2)
+        : theme.colorScheme.onSurface;
+
+    return AnimatedSlide(
+      offset: visible ? Offset.zero : const Offset(0, -1),
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeOutCubic,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 380),
+        curve: Curves.easeOut,
+        child: Material(
+          color: backgroundColor,
+          elevation: visible ? 3 : 0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topPadding),
+            child: SizedBox(
+              height: kToolbarHeight,
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    tooltip: 'Back',
+                    color: foregroundColor,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: foregroundColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: onToggleTheme,
+                    tooltip: 'Theme',
+                    color: foregroundColor,
+                    icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+                  ),
+                  IconButton(
+                    onPressed: onRefresh,
+                    tooltip: 'Refresh',
+                    color: foregroundColor,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                  IconButton(
+                    onPressed: () => unawaited(onOpenSettings()),
+                    tooltip: 'Settings',
+                    color: foregroundColor,
+                    icon: const Icon(Icons.tune),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderBottomBar extends StatelessWidget {
+  final bool visible;
+  final GithubMarkdownFile? previousFile;
+  final GithubMarkdownFile? nextFile;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  const _ReaderBottomBar({
+    required this.visible,
+    required this.previousFile,
+    required this.nextFile,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+    final isDark = theme.brightness == Brightness.dark;
+    final backgroundColor = isDark
+        ? const Color(0xF2050506)
+        : theme.colorScheme.surface.withValues(alpha: 0.96);
+    final foregroundColor = isDark
+        ? const Color(0xFFEDEFF2)
+        : theme.colorScheme.onSurface;
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, 1),
+        duration: const Duration(milliseconds: 520),
+        curve: Curves.easeOutCubic,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 380),
+          curve: Curves.easeOut,
+          child: Material(
+            color: backgroundColor,
+            elevation: visible ? 3 : 0,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: bottomPadding),
+              child: SizedBox(
+                height: kToolbarHeight,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: onPrevious,
+                        icon: const Icon(Icons.chevron_left),
+                        label: Text(
+                          previousFile?.name ?? 'Previous',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: foregroundColor,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      width: 1,
+                      height: 28,
+                      color: theme.colorScheme.outlineVariant,
+                    ),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: onNext,
+                        iconAlignment: IconAlignment.end,
+                        icon: const Icon(Icons.chevron_right),
+                        label: Text(
+                          nextFile?.name ?? 'Next',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: foregroundColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorScaffold extends StatelessWidget {
+  final String title;
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorScaffold({
+    required this.title,
+    required this.message,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: SafeArea(
+        child: _ErrorView(message: message, onRetry: onRetry),
+      ),
+    );
+  }
+}
+
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorView({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Icon(
+              Icons.error_outline,
+              color: Theme.of(context).colorScheme.error,
+              size: 36,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

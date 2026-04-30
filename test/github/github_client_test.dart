@@ -1,0 +1,94 @@
+import 'dart:convert';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:markdown_editor/github/github_client.dart';
+import 'package:markdown_editor/github/github_config.dart';
+
+void main() {
+  const config = GithubConfig(
+    owner: 'octo',
+    repo: 'notes',
+    branch: 'main',
+    token: 'secret-token',
+  );
+
+  test(
+    'fetchMarkdownTree sends GitHub headers and filters markdown files',
+    () async {
+      final client = GithubClient(
+        config: config,
+        httpClient: MockClient((request) async {
+          expect(request.url.host, 'api.github.com');
+          expect(request.url.path, '/repos/octo/notes/git/trees/main');
+          expect(request.url.queryParameters['recursive'], '1');
+          expect(request.headers['Authorization'], 'Bearer secret-token');
+          expect(request.headers['Accept'], 'application/vnd.github+json');
+          expect(request.headers['X-GitHub-Api-Version'], '2022-11-28');
+
+          return http.Response(
+            jsonEncode({
+              'tree': [
+                {'path': 'README.md', 'type': 'blob'},
+                {'path': 'docs/chapter.markdown', 'type': 'blob'},
+                {'path': 'assets/cover.png', 'type': 'blob'},
+                {'path': 'docs', 'type': 'tree'},
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final entries = await client.fetchMarkdownTree();
+
+      expect(entries.map((entry) => entry.path), [
+        'README.md',
+        'docs/chapter.markdown',
+      ]);
+    },
+  );
+
+  test('fetchMarkdownFile decodes repository contents response', () async {
+    final client = GithubClient(
+      config: config,
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/repos/octo/notes/contents/docs/a.md');
+        expect(request.url.queryParameters['ref'], 'main');
+
+        return http.Response(
+          jsonEncode({
+            'encoding': 'base64',
+            'content': base64.encode(utf8.encode('# Title\n\nBody')),
+          }),
+          200,
+        );
+      }),
+    );
+
+    final content = await client.fetchMarkdownFile('docs/a.md');
+
+    expect(content, '# Title\n\nBody');
+  });
+
+  test('fetchMarkdownTree exposes GitHub API errors', () async {
+    final client = GithubClient(
+      config: config,
+      httpClient: MockClient((request) async {
+        return http.Response(jsonEncode({'message': 'Bad credentials'}), 401);
+      }),
+    );
+
+    expect(
+      client.fetchMarkdownTree,
+      throwsA(
+        isA<GithubApiException>().having(
+          (error) => error.toString(),
+          'message',
+          'GitHub API 401: Bad credentials',
+        ),
+      ),
+    );
+  });
+}

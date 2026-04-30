@@ -11,14 +11,21 @@ class CustomImgConfig extends ImgConfig {
 
   final AlignmentGeometry alignment;
 
+  final Map<String, String>? headers;
+
+  final String Function(String url)? transformUrl;
+
   CustomImgConfig({
     this.wrapWithViewer = true,
     this.rasterFit = BoxFit.cover,
     this.svgFit = BoxFit.scaleDown,
     this.alignment = Alignment.center,
+    this.headers,
+    this.transformUrl,
     super.errorBuilder,
   }) : super(
          builder: (url, attrs) {
+           final imageUrl = transformUrl == null ? url : transformUrl(url);
            double? width;
            double? height;
            try {
@@ -33,14 +40,16 @@ class CustomImgConfig extends ImgConfig {
            } catch (_) {}
 
            final alt = attrs['alt'] ?? '';
-           final lower = url.toLowerCase();
-           final isNetwork = url.startsWith('http');
+           final lower = imageUrl.toLowerCase();
+           final isNetwork = imageUrl.startsWith('http');
            final isSvg =
                lower.endsWith('.svg') ||
                attrs['type']?.toLowerCase() == 'image/svg+xml';
 
            Widget buildError(Object error) {
-             if (errorBuilder != null) return errorBuilder(url, alt, error);
+             if (errorBuilder != null) {
+               return errorBuilder(imageUrl, alt, error);
+             }
 
              return Row(
                mainAxisSize: MainAxisSize.min,
@@ -63,7 +72,8 @@ class CustomImgConfig extends ImgConfig {
            if (isSvg) {
              img = isNetwork
                  ? SvgPicture.network(
-                     url,
+                     imageUrl,
+                     headers: headers,
                      width: width,
                      height: height,
                      fit: svgFit,
@@ -72,7 +82,7 @@ class CustomImgConfig extends ImgConfig {
                      errorBuilder: (ctx, error, stack) => buildError(error),
                    )
                  : SvgPicture.asset(
-                     url,
+                     imageUrl,
                      width: width,
                      height: height,
                      fit: svgFit,
@@ -83,7 +93,8 @@ class CustomImgConfig extends ImgConfig {
            } else {
              img = isNetwork
                  ? Image.network(
-                     url,
+                     imageUrl,
+                     headers: headers,
                      width: width,
                      height: height,
                      fit: rasterFit,
@@ -91,7 +102,7 @@ class CustomImgConfig extends ImgConfig {
                      errorBuilder: (ctx, error, stack) => buildError(error),
                    )
                  : Image.asset(
-                     url,
+                     imageUrl,
                      width: width,
                      height: height,
                      fit: rasterFit,

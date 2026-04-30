@@ -12,7 +12,8 @@ SpanNodeGeneratorWithTag latexGenerator = SpanNodeGeneratorWithTag(
 const _latexTag = 'latex';
 
 class LatexSyntax extends m.InlineSyntax {
-  LatexSyntax() : super(r'(\$\$[\s\S]+\$\$)|(\$.+?\$)');
+  LatexSyntax()
+    : super(r'(\$\$[\s\S]+?\$\$)|(\\\[[\s\S]+?\\\])|(\\\(.+?\\\))|(\$.+?\$)');
 
   @override
   bool onMatch(m.InlineParser parser, Match match) {
@@ -24,9 +25,14 @@ class LatexSyntax extends m.InlineSyntax {
     const inlineSyntax = '\$';
     if (matchValue.startsWith(blockSyntax) &&
         matchValue.endsWith(blockSyntax) &&
-        (matchValue != blockSyntax)) {
+        matchValue != blockSyntax) {
       content = matchValue.substring(2, matchValue.length - 2);
       isInline = false;
+    } else if (matchValue.startsWith(r'\[') && matchValue.endsWith(r'\]')) {
+      content = matchValue.substring(2, matchValue.length - 2);
+      isInline = false;
+    } else if (matchValue.startsWith(r'\(') && matchValue.endsWith(r'\)')) {
+      content = matchValue.substring(2, matchValue.length - 2);
     } else if (matchValue.startsWith(inlineSyntax) &&
         matchValue.endsWith(inlineSyntax) &&
         matchValue != inlineSyntax) {
@@ -60,7 +66,10 @@ class LatexNode extends SpanNode {
       textStyle: style,
       textScaleFactor: 1,
       onErrorFallback: (error) {
-        return Text(textContent, style: style.copyWith(color: Colors.red));
+        return Text(
+          'LaTeX error: ${error.message}',
+          style: style.copyWith(color: Colors.red),
+        );
       },
     );
     return WidgetSpan(
