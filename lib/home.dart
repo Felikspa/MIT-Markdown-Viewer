@@ -382,32 +382,51 @@ class _SettingsScreenState extends State<_SettingsScreen> {
       final entries = await client.fetchMarkdownTree();
       var updated = 0;
       var skipped = 0;
-      for (var index = 0; index < entries.length; index++) {
-        final entry = entries[index];
-        if (!mounted) {
-          return;
+      var completed = 0;
+      const concurrency = 6;
+      var cursor = 0;
+      final counters = _SyncCounters();
+
+      Future<void> worker() async {
+        while (true) {
+          final currentIndex = cursor;
+          if (currentIndex >= entries.length) {
+            return;
+          }
+          cursor++;
+          final entry = entries[currentIndex];
+          final isFresh = await cacheStore.isFresh(
+            config: _config,
+            path: entry.path,
+            sha: entry.sha,
+          );
+          if (isFresh) {
+            counters.skipped++;
+          } else {
+            final content = await client.fetchMarkdownFile(entry.path);
+            await cacheStore.write(
+              config: _config,
+              path: entry.path,
+              content: content,
+              sha: entry.sha,
+            );
+            counters.updated++;
+          }
+          completed++;
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _syncStatus = 'Syncing $completed/${entries.length}';
+          });
         }
-        setState(() {
-          _syncStatus = 'Syncing ${index + 1}/${entries.length}';
-        });
-        final isFresh = await cacheStore.isFresh(
-          config: _config,
-          path: entry.path,
-          sha: entry.sha,
-        );
-        if (isFresh) {
-          skipped++;
-          continue;
-        }
-        final content = await client.fetchMarkdownFile(entry.path);
-        await cacheStore.write(
-          config: _config,
-          path: entry.path,
-          content: content,
-          sha: entry.sha,
-        );
-        updated++;
       }
+
+      await Future.wait([
+        for (var index = 0; index < concurrency; index++) worker(),
+      ]);
+      updated = counters.updated;
+      skipped = counters.skipped;
       await widget.onRepositoryUpdated();
       if (!mounted) {
         return;
@@ -555,6 +574,11 @@ class _SettingsScreenState extends State<_SettingsScreen> {
       },
     );
   }
+}
+
+class _SyncCounters {
+  int updated = 0;
+  int skipped = 0;
 }
 
 class _RepositoryScreen extends StatefulWidget {
@@ -835,7 +859,17 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(milliseconds: 1100),
+          margin: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            MediaQuery.paddingOf(context).bottom + kToolbarHeight + 24,
+          ),
+        ),
       );
     });
   }
