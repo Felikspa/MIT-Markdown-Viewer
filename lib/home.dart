@@ -731,7 +731,10 @@ class _RepositoryScreen extends StatefulWidget {
 }
 
 class _RepositoryScreenState extends State<_RepositoryScreen> {
+  final MarkdownCacheStore _cacheStore = MarkdownCacheStore();
   late Future<GithubDirectoryNode> _treeFuture;
+  bool _isUploadingDrafts = false;
+  String? _uploadStatus;
 
   @override
   void initState() {
@@ -760,6 +763,175 @@ class _RepositoryScreenState extends State<_RepositoryScreen> {
     });
   }
 
+  Future<void> _uploadAllDrafts() async {
+    setState(() {
+      _isUploadingDrafts = true;
+      _uploadStatus = 'Checking local drafts...';
+    });
+    try {
+      final drafts = await _cacheStore.listDirtyDrafts(config: widget.config);
+      if (drafts.isEmpty) {
+        _showSnackBar('No local changes to upload.');
+        return;
+      }
+
+      setState(() {
+        _uploadStatus = 'Checking remote changes...';
+      });
+      final client = GithubClient(config: widget.config);
+      final remoteEntries = await client.fetchMarkdownTree();
+      final remoteShaByPath = {
+        for (final entry in remoteEntries) entry.path: entry.sha,
+      };
+      final conflicts = [
+        for (final draft in drafts)
+          if (remoteShaByPath[draft.path] != draft.sha) draft.path,
+      ];
+      if (conflicts.isNotEmpty) {
+        await _showUploadConflicts(conflicts);
+        return;
+      }
+
+      final message = await _requestBulkCommitMessage(drafts.length);
+      if (message == null) {
+        return;
+      }
+
+      for (var index = 0; index < drafts.length; index++) {
+        final draft = drafts[index];
+        setState(() {
+          _uploadStatus = 'Uploading ${index + 1}/${drafts.length}';
+        });
+        final updatedFile = await client.updateMarkdownFile(
+          path: draft.path,
+          content: draft.content,
+          sha: draft.sha,
+          message: '$message: ${draft.path}',
+        );
+        await _cacheStore.write(
+          config: widget.config,
+          path: draft.path,
+          content: draft.content,
+          sha: updatedFile.sha,
+        );
+      }
+
+      _showSnackBar('Uploaded ${drafts.length} local change(s).');
+      _refresh();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnackBar(error.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploadingDrafts = false;
+          _uploadStatus = null;
+        });
+      }
+    }
+  }
+
+  Future<String?> _requestBulkCommitMessage(int count) async {
+    final controller = TextEditingController(
+      text: 'Update $count Markdown file${count == 1 ? '' : 's'}',
+    );
+    final message = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Commit message'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Message',
+              border: OutlineInputBorder(),
+            ),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (value) {
+              if (value.trim().isEmpty) {
+                return;
+              }
+              Navigator.of(context).pop(value.trim());
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.isEmpty) {
+                  return;
+                }
+                Navigator.of(context).pop(value);
+              },
+              child: const Text('Upload'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    return message;
+  }
+
+  Future<void> _showUploadConflicts(List<String> conflicts) async {
+    if (!mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Upload conflict'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'These files changed on GitHub after your local draft was created. Refresh and review before uploading.',
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final path in conflicts)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.warning_amber),
+                          title: Text(path),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _openFile(
     GithubMarkdownFile file,
     List<GithubMarkdownFile> files,
@@ -783,6 +955,18 @@ class _RepositoryScreenState extends State<_RepositoryScreen> {
       appBar: AppBar(
         title: Text('${widget.config.owner}/${widget.config.repo}'),
         actions: [
+          IconButton(
+            onPressed: _isUploadingDrafts
+                ? null
+                : () => unawaited(_uploadAllDrafts()),
+            tooltip: _uploadStatus ?? 'Upload all local changes',
+            icon: _isUploadingDrafts
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cloud_upload_outlined),
+          ),
           IconButton(
             onPressed: _refresh,
             tooltip: 'Refresh',
@@ -1246,6 +1430,27 @@ class _ReaderScreenState extends State<_ReaderScreen> {
     return _activeHeadingIndex.clamp(0, headings.length - 1);
   }
 
+  double get _readerScrollProgress {
+    if (!_scrollController.hasClients) {
+      return 0;
+    }
+    final maxScrollExtent = _scrollController.position.maxScrollExtent;
+    if (maxScrollExtent <= 0) {
+      return 0;
+    }
+    return (_scrollController.offset / maxScrollExtent).clamp(0, 1);
+  }
+
+  void _jumpToScrollProgress(double progress) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      final maxScrollExtent = _scrollController.position.maxScrollExtent;
+      _scrollController.jumpTo(maxScrollExtent * progress.clamp(0, 1));
+    });
+  }
+
   Future<void> _openSibling(
     GithubMarkdownFile file, {
     required bool isPrevious,
@@ -1344,6 +1549,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
           path: widget.file.path,
           initialContent: content,
           initialSha: _currentSha,
+          initialScrollProgress: _readerScrollProgress,
         ),
       ),
     );
@@ -1373,6 +1579,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         ),
       );
     });
+    _jumpToScrollProgress(result.scrollProgress);
   }
 
   Future<void> _querySelection(String? text) async {
