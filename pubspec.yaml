@@ -37,6 +37,7 @@ dependencies:
   share_plus: ^12.0.2
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
+  webview_flutter: ^4.13.1
 
 dev_dependencies:
   flutter_lints: ^6.0.0
@@ -46,3 +47,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   generate: true
+  assets:
+    - assets/vendor/mermaid/mermaid.min.js

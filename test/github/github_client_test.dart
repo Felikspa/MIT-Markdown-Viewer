@@ -77,6 +77,46 @@ void main() {
     expect(content, '# Title\n\nBody');
   });
 
+  test(
+    'updateMarkdownFile uploads encoded content and returns new sha',
+    () async {
+      final client = GithubClient(
+        config: config,
+        httpClient: MockClient((request) async {
+          expect(request.method, 'PUT');
+          expect(request.url.path, '/repos/octo/notes/contents/docs/a.md');
+          expect(request.headers['Authorization'], 'Bearer secret-token');
+          expect(request.headers['Content-Type'], 'application/json');
+
+          final body = jsonDecode(request.body) as Map<String, Object?>;
+          expect(body['message'], 'Update docs/a.md');
+          expect(body['sha'], 'old-sha');
+          expect(body['branch'], 'main');
+          expect(
+            utf8.decode(base64.decode(body['content']! as String)),
+            '# Updated',
+          );
+
+          return http.Response(
+            jsonEncode({
+              'content': {'sha': 'new-sha'},
+            }),
+            200,
+          );
+        }),
+      );
+
+      final updatedFile = await client.updateMarkdownFile(
+        path: 'docs/a.md',
+        content: '# Updated',
+        sha: 'old-sha',
+        message: 'Update docs/a.md',
+      );
+
+      expect(updatedFile.sha, 'new-sha');
+    },
+  );
+
   test('fetchMarkdownTree exposes GitHub API errors', () async {
     final client = GithubClient(
       config: config,

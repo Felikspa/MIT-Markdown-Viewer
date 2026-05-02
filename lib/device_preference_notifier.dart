@@ -9,6 +9,8 @@ enum _SharedPreferencesKeys {
   isSplitLayout,
   defaultFolderPath,
   readerFontSize,
+  readerEnglishFontFamily,
+  readerChineseFontFamily,
 }
 
 class DevicePreferences {
@@ -16,12 +18,16 @@ class DevicePreferences {
   final bool isSplitLayout;
   final String? defaultFolderPath;
   final double readerFontSize;
+  final String readerEnglishFontFamily;
+  final String readerChineseFontFamily;
 
   DevicePreferences({
     this.themeMode = AppThemeMode.system,
     this.isSplitLayout = false,
     this.defaultFolderPath,
     this.readerFontSize = 17,
+    this.readerEnglishFontFamily = '',
+    this.readerChineseFontFamily = '',
   });
 
   bool get isDarkMode {
@@ -39,12 +45,18 @@ class DevicePreferences {
     bool? isSplitLayout,
     String? defaultFolderPath,
     double? readerFontSize,
+    String? readerEnglishFontFamily,
+    String? readerChineseFontFamily,
   }) {
     return DevicePreferences(
       themeMode: themeMode ?? this.themeMode,
       isSplitLayout: isSplitLayout ?? this.isSplitLayout,
       defaultFolderPath: defaultFolderPath ?? this.defaultFolderPath,
       readerFontSize: readerFontSize ?? this.readerFontSize,
+      readerEnglishFontFamily:
+          readerEnglishFontFamily ?? this.readerEnglishFontFamily,
+      readerChineseFontFamily:
+          readerChineseFontFamily ?? this.readerChineseFontFamily,
     );
   }
 
@@ -54,16 +66,24 @@ class DevicePreferences {
         other.themeMode == themeMode &&
         other.isSplitLayout == isSplitLayout &&
         other.defaultFolderPath == defaultFolderPath &&
-        other.readerFontSize == readerFontSize;
+        other.readerFontSize == readerFontSize &&
+        other.readerEnglishFontFamily == readerEnglishFontFamily &&
+        other.readerChineseFontFamily == readerChineseFontFamily;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(themeMode, isSplitLayout, defaultFolderPath, readerFontSize);
+  int get hashCode => Object.hash(
+    themeMode,
+    isSplitLayout,
+    defaultFolderPath,
+    readerFontSize,
+    readerEnglishFontFamily,
+    readerChineseFontFamily,
+  );
 
   @override
   String toString() {
-    return 'DevicePreferences(themeMode: $themeMode, isSplitLayout: $isSplitLayout, defaultFolderPath: $defaultFolderPath, readerFontSize: $readerFontSize)';
+    return 'DevicePreferences(themeMode: $themeMode, isSplitLayout: $isSplitLayout, defaultFolderPath: $defaultFolderPath, readerFontSize: $readerFontSize, readerEnglishFontFamily: $readerEnglishFontFamily, readerChineseFontFamily: $readerChineseFontFamily)';
   }
 }
 
@@ -83,11 +103,19 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
     );
     final readerFontSize =
         _prefs.getDouble(_SharedPreferencesKeys.readerFontSize.name) ?? 17;
+    final readerEnglishFontFamily =
+        _prefs.getString(_SharedPreferencesKeys.readerEnglishFontFamily.name) ??
+        '';
+    final readerChineseFontFamily =
+        _prefs.getString(_SharedPreferencesKeys.readerChineseFontFamily.name) ??
+        '';
     value = DevicePreferences(
       themeMode: themeMode,
       isSplitLayout: isSplitLayout,
       defaultFolderPath: defaultFolderPath,
       readerFontSize: readerFontSize,
+      readerEnglishFontFamily: readerEnglishFontFamily,
+      readerChineseFontFamily: readerChineseFontFamily,
     );
     notifyListeners();
   }
@@ -130,6 +158,26 @@ class DevicePreferenceNotifier extends ValueNotifier<DevicePreferences> {
     await _prefs.setDouble(
       _SharedPreferencesKeys.readerFontSize.name,
       fontSize,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setReaderEnglishFontFamily(String fontFamily) async {
+    final normalizedFontFamily = fontFamily.trim();
+    value = value.copyWith(readerEnglishFontFamily: normalizedFontFamily);
+    await _prefs.setString(
+      _SharedPreferencesKeys.readerEnglishFontFamily.name,
+      normalizedFontFamily,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setReaderChineseFontFamily(String fontFamily) async {
+    final normalizedFontFamily = fontFamily.trim();
+    value = value.copyWith(readerChineseFontFamily: normalizedFontFamily);
+    await _prefs.setString(
+      _SharedPreferencesKeys.readerChineseFontFamily.name,
+      normalizedFontFamily,
     );
     notifyListeners();
   }

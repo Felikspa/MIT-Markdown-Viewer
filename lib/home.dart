@@ -1,18 +1,24 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
+import 'package:markdown_editor/ai/openai_client.dart';
+import 'package:markdown_editor/ai/openai_config_screen.dart';
+import 'package:markdown_editor/ai/openai_config_store.dart';
 import 'package:markdown_editor/device_preference_notifier.dart';
 import 'package:markdown_editor/github/github_client.dart';
 import 'package:markdown_editor/github/github_config.dart';
 import 'package:markdown_editor/github/github_config_store.dart';
 import 'package:markdown_editor/github/github_tree.dart';
 import 'package:markdown_editor/github/markdown_cache_store.dart';
+import 'package:markdown_editor/reader/markdown_editor_screen.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/custom_image_config.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/custom_text_node.dart';
 import 'package:markdown_editor/widgets/MarkdownBody/latex_node.dart';
+import 'package:markdown_editor/widgets/MarkdownBody/mermaid_node.dart';
 import 'package:markdown_widget/markdown_widget.dart';
 
 class Home extends StatefulWidget {
@@ -336,8 +342,13 @@ class _SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<_SettingsScreen> {
+  static const MethodChannel _platformChannel = MethodChannel(
+    'com.adeeteya.markdown_editor/channel',
+  );
+
   late GithubConfig _config;
   late double _readerFontSize;
+  late final Future<List<String>> _fontFamiliesFuture;
   bool _isSyncing = false;
   String? _syncStatus;
 
@@ -347,6 +358,22 @@ class _SettingsScreenState extends State<_SettingsScreen> {
     _config = widget.config;
     _readerFontSize = widget.devicePreferenceNotifier.value.readerFontSize
         .clamp(12, 28);
+    _fontFamiliesFuture = _loadSystemFontFamilies();
+  }
+
+  Future<List<String>> _loadSystemFontFamilies() async {
+    final fontFamilies = await _platformChannel.invokeListMethod<String>(
+      'getSystemFontFamilies',
+    );
+    if (fontFamilies == null) {
+      throw StateError('System font list is empty.');
+    }
+    return fontFamilies
+        .map((fontFamily) => fontFamily.trim())
+        .where((fontFamily) => fontFamily.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
   Future<void> _editRepository() async {
@@ -368,6 +395,12 @@ class _SettingsScreenState extends State<_SettingsScreen> {
           },
         ),
       ),
+    );
+  }
+
+  Future<void> _editAiApi() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<bool>(builder: (context) => const OpenAiConfigScreen()),
     );
   }
 
@@ -457,6 +490,63 @@ class _SettingsScreenState extends State<_SettingsScreen> {
     unawaited(widget.devicePreferenceNotifier.setReaderFontSize(value));
   }
 
+  void _setReaderEnglishFontFamily(String value) {
+    unawaited(
+      widget.devicePreferenceNotifier.setReaderEnglishFontFamily(value),
+    );
+  }
+
+  void _setReaderChineseFontFamily(String value) {
+    unawaited(
+      widget.devicePreferenceNotifier.setReaderChineseFontFamily(value),
+    );
+  }
+
+  Widget _fontFamilyDropdown({
+    required String value,
+    required ValueChanged<String> onChanged,
+  }) {
+    return FutureBuilder<List<String>>(
+      future: _fontFamiliesFuture,
+      builder: (context, snapshot) {
+        final fontFamilies = snapshot.data ?? const <String>[];
+        final options = ['', ...fontFamilies];
+        final selectedValue = options.contains(value) ? value : '';
+        return DropdownButtonFormField<String>(
+          initialValue: selectedValue,
+          isExpanded: true,
+          decoration: InputDecoration(
+            helperText: snapshot.connectionState == ConnectionState.done
+                ? 'Current device fonts'
+                : 'Loading fonts...',
+            errorText: snapshot.hasError ? snapshot.error.toString() : null,
+          ),
+          items: [
+            const DropdownMenuItem<String>(
+              value: '',
+              child: Text('Follow system'),
+            ),
+            for (final fontFamily in fontFamilies)
+              DropdownMenuItem<String>(
+                value: fontFamily,
+                child: Text(
+                  fontFamily,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontFamily: fontFamily),
+                ),
+              ),
+          ],
+          onChanged: (nextValue) {
+            if (nextValue == null) {
+              return;
+            }
+            onChanged(nextValue);
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -501,6 +591,26 @@ class _SettingsScreenState extends State<_SettingsScreen> {
                   ),
                   enabled: !_isSyncing,
                   onTap: _isSyncing ? null : _syncAllMarkdown,
+                ),
+                const Divider(height: 28),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text(
+                    'AI',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.smart_toy_outlined),
+                  title: const Text('OpenAI compatible API'),
+                  subtitle: const Text(
+                    'Configure base URL, API key, and model for selected text queries.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _editAiApi,
                 ),
                 const Divider(height: 28),
                 Padding(
@@ -564,6 +674,28 @@ class _SettingsScreenState extends State<_SettingsScreen> {
                       _readerFontSize.round().toString(),
                       textAlign: TextAlign.end,
                       style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.text_fields),
+                  title: const Text('English font'),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _fontFamilyDropdown(
+                      value: preferences.readerEnglishFontFamily,
+                      onChanged: _setReaderEnglishFontFamily,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.translate),
+                  title: const Text('Chinese font'),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _fontFamilyDropdown(
+                      value: preferences.readerChineseFontFamily,
+                      onChanged: _setReaderChineseFontFamily,
                     ),
                   ),
                 ),
@@ -764,28 +896,50 @@ class _ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<_ReaderScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<SelectionAreaState> _selectionAreaKey =
+      GlobalKey<SelectionAreaState>();
   final ScrollController _scrollController = ScrollController();
   final MarkdownCacheStore _cacheStore = MarkdownCacheStore();
   late Future<_ReaderContent> _contentFuture;
   bool _isTopBarVisible = false;
+  bool _isSourceView = false;
+  int _activeHeadingIndex = 0;
+  _ReaderTextStats _currentStats = const _ReaderTextStats(
+    characters: 0,
+    words: 0,
+  );
+  Offset? _pointerDownPosition;
+  DateTime? _pointerDownTime;
   String? _cachedContent;
   double? _cachedFontSize;
+  String? _cachedEnglishFontFamily;
+  String? _cachedChineseFontFamily;
   bool? _cachedIsDark;
   _ReaderRenderModel? _cachedRenderModel;
   _ReaderContentStatus? _lastShownContentStatus;
+  OverlayEntry? _statusOverlay;
+  Timer? _headingUpdateTimer;
+  late String _currentSha;
+  String? _currentContent;
+  String? _selectedText;
 
   @override
   void initState() {
     super.initState();
+    _currentSha = widget.file.sha;
     unawaited(
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
     );
+    _scrollController.addListener(_scheduleActiveHeadingUpdate);
     _contentFuture = _fetchContent();
   }
 
   @override
   void dispose() {
+    _statusOverlay?.remove();
+    _headingUpdateTimer?.cancel();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+    _scrollController.removeListener(_scheduleActiveHeadingUpdate);
     _scrollController.dispose();
     super.dispose();
   }
@@ -795,20 +949,26 @@ class _ReaderScreenState extends State<_ReaderScreen> {
       config: widget.config,
       path: widget.file.path,
     );
+    if (cachedContent != null && cachedContent.isDirty) {
+      return _ReaderContent.fromContent(
+        content: cachedContent.content,
+        status: _ReaderContentStatus.localDraft,
+      );
+    }
 
     final hasConnection = await InternetConnection().hasInternetAccess;
     if (!hasConnection) {
       if (cachedContent == null) {
         throw const GithubApiException('Offline and no cached copy exists.');
       }
-      return _ReaderContent(
+      return _ReaderContent.fromContent(
         content: cachedContent.content,
         status: _ReaderContentStatus.offlineCached,
       );
     }
 
     if (cachedContent != null && cachedContent.sha == widget.file.sha) {
-      return _ReaderContent(
+      return _ReaderContent.fromContent(
         content: cachedContent.content,
         status: _ReaderContentStatus.upToDate,
       );
@@ -824,7 +984,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         content: content,
         sha: widget.file.sha,
       );
-      return _ReaderContent(
+      return _ReaderContent.fromContent(
         content: content,
         status: cachedContent == null
             ? _ReaderContentStatus.downloaded
@@ -834,7 +994,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
       if (cachedContent == null) {
         rethrow;
       }
-      return _ReaderContent(
+      return _ReaderContent.fromContent(
         content: cachedContent.content,
         status: _ReaderContentStatus.networkFailedCached,
       );
@@ -850,6 +1010,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
       _ReaderContentStatus.upToDate => 'Already up to date.',
       _ReaderContentStatus.updated => 'Updated to the latest version.',
       _ReaderContentStatus.downloaded => 'Downloaded and cached.',
+      _ReaderContentStatus.localDraft => 'Opened local draft.',
       _ReaderContentStatus.offlineCached => 'Offline. Opened cached copy.',
       _ReaderContentStatus.networkFailedCached =>
         'Network failed. Opened cached copy.',
@@ -858,19 +1019,19 @@ class _ReaderScreenState extends State<_ReaderScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(milliseconds: 1100),
-          margin: EdgeInsets.fromLTRB(
-            16,
-            0,
-            16,
-            MediaQuery.paddingOf(context).bottom + kToolbarHeight + 24,
-          ),
-        ),
+      _statusOverlay?.remove();
+      final overlay = Overlay.of(context);
+      final entry = OverlayEntry(
+        builder: (context) => _ReaderStatusToast(message: message),
       );
+      _statusOverlay = entry;
+      overlay.insert(entry);
+      Future<void>.delayed(const Duration(milliseconds: 1800), () {
+        if (_statusOverlay == entry) {
+          entry.remove();
+          _statusOverlay = null;
+        }
+      });
     });
   }
 
@@ -882,15 +1043,114 @@ class _ReaderScreenState extends State<_ReaderScreen> {
   }
 
   Future<void> _toggleTheme() async {
-    _clearMarkdownCache();
     await widget.devicePreferenceNotifier.toggleTheme();
+    if (!mounted) {
+      return;
+    }
+    setState(_clearMarkdownCache);
   }
 
   void _clearMarkdownCache() {
     _cachedContent = null;
     _cachedFontSize = null;
+    _cachedEnglishFontFamily = null;
+    _cachedChineseFontFamily = null;
     _cachedIsDark = null;
     _cachedRenderModel = null;
+  }
+
+  void _toggleSourceView() {
+    setState(() {
+      _isSourceView = !_isSourceView;
+    });
+  }
+
+  void _handleReaderPointerDown(PointerDownEvent event) {
+    _pointerDownPosition = event.position;
+    _pointerDownTime = DateTime.now();
+  }
+
+  void _handleReaderPointerUp(PointerUpEvent event) {
+    final downPosition = _pointerDownPosition;
+    final downTime = _pointerDownTime;
+    _pointerDownPosition = null;
+    _pointerDownTime = null;
+    if (downPosition == null || downTime == null) {
+      return;
+    }
+    final distance = (event.position - downPosition).distance;
+    final duration = DateTime.now().difference(downTime);
+    if (distance > 12 || duration > const Duration(milliseconds: 260)) {
+      return;
+    }
+    _selectionAreaKey.currentState?.selectableRegion.clearSelection();
+    _setTopBarVisible(false);
+  }
+
+  void _rememberStats(_ReaderTextStats stats) {
+    if (_currentStats == stats) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _currentStats == stats) {
+        return;
+      }
+      setState(() {
+        _currentStats = stats;
+      });
+    });
+  }
+
+  void _scheduleActiveHeadingUpdate() {
+    if (_headingUpdateTimer?.isActive ?? false) {
+      return;
+    }
+    _headingUpdateTimer = Timer(const Duration(milliseconds: 90), () {
+      if (mounted) {
+        _updateActiveHeadingFromScroll();
+      }
+    });
+  }
+
+  void _updateActiveHeadingFromScroll() {
+    final renderModel = _cachedRenderModel;
+    if (renderModel == null || renderModel.headings.isEmpty || !mounted) {
+      return;
+    }
+
+    final threshold = MediaQuery.paddingOf(context).top + 88;
+    int? activeIndex;
+    int? firstBelowIndex;
+    for (var index = 0; index < renderModel.headings.length; index++) {
+      final heading = renderModel.headings[index];
+      final keyContext =
+          renderModel.itemKeys[heading.widgetIndex].currentContext;
+      if (keyContext == null) {
+        continue;
+      }
+      final box = keyContext.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) {
+        continue;
+      }
+      final top = box.localToGlobal(Offset.zero).dy;
+      if (top <= threshold) {
+        activeIndex = index;
+      } else {
+        firstBelowIndex ??= index;
+      }
+    }
+
+    final nextIndex =
+        activeIndex ??
+        (firstBelowIndex == null
+            ? renderModel.headings.length - 1
+            : (firstBelowIndex - 1).clamp(0, renderModel.headings.length - 1));
+    if (nextIndex == _activeHeadingIndex) {
+      return;
+    }
+    setState(() {
+      _activeHeadingIndex = nextIndex;
+    });
   }
 
   void _setTopBarVisible(bool visible) {
@@ -978,6 +1238,14 @@ class _ReaderScreenState extends State<_ReaderScreen> {
     return widget.files[index + 1];
   }
 
+  int get _safeActiveHeadingIndex {
+    final headings = _cachedRenderModel?.headings;
+    if (headings == null || headings.isEmpty) {
+      return 0;
+    }
+    return _activeHeadingIndex.clamp(0, headings.length - 1);
+  }
+
   Future<void> _openSibling(
     GithubMarkdownFile file, {
     required bool isPrevious,
@@ -1024,22 +1292,205 @@ class _ReaderScreenState extends State<_ReaderScreen> {
     }
   }
 
+  void _handleSelectionChanged(SelectedContent? content) {
+    final plainText = content?.plainText.trim();
+    if (plainText == null || plainText.isEmpty) {
+      if (_selectedText != null) {
+        setState(() {
+          _selectedText = null;
+        });
+      }
+      return;
+    }
+    if (_selectedText == plainText) {
+      return;
+    }
+    setState(() {
+      _selectedText = plainText;
+    });
+  }
+
+  Widget _selectionContextMenu(
+    BuildContext context,
+    SelectableRegionState selectableRegionState,
+  ) {
+    final selectedText = _selectedText?.trim();
+    final buttonItems = [
+      if (selectedText != null && selectedText.isNotEmpty)
+        ContextMenuButtonItem(
+          label: '查询',
+          onPressed: () {
+            ContextMenuController.removeAny();
+            unawaited(_querySelection(selectedText));
+          },
+        ),
+      ...selectableRegionState.contextMenuButtonItems,
+    ];
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: selectableRegionState.contextMenuAnchors,
+      buttonItems: buttonItems,
+    );
+  }
+
+  Future<void> _openEditor() async {
+    final content = _currentContent;
+    if (content == null) {
+      return;
+    }
+    final result = await Navigator.of(context).push<MarkdownEditResult>(
+      MaterialPageRoute<MarkdownEditResult>(
+        builder: (context) => MarkdownEditorScreen(
+          config: widget.config,
+          path: widget.file.path,
+          initialContent: content,
+          initialSha: _currentSha,
+        ),
+      ),
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+    _currentSha = result.sha;
+    await _cacheStore.write(
+      config: widget.config,
+      path: widget.file.path,
+      content: result.content,
+      sha: result.sha,
+      isDirty: !result.uploaded,
+    );
+    if (!mounted) {
+      return;
+    }
+    _lastShownContentStatus = null;
+    setState(() {
+      _clearMarkdownCache();
+      _contentFuture = Future.value(
+        _ReaderContent.fromContent(
+          content: result.content,
+          status: result.uploaded
+              ? _ReaderContentStatus.updated
+              : _ReaderContentStatus.localDraft,
+        ),
+      );
+    });
+  }
+
+  Future<void> _querySelection(String? text) async {
+    final selectedText = text?.trim();
+    if (selectedText == null || selectedText.isEmpty) {
+      _showSnackBar('Select text first.');
+      return;
+    }
+
+    final store = OpenAiConfigStore();
+    final config = await store.load();
+    if (!mounted) {
+      return;
+    }
+    if (config == null) {
+      _showSnackBar('Configure AI API in Settings first.');
+      return;
+    }
+
+    final future = OpenAiClient(config: config).explainSelection(
+      selectedText: selectedText,
+      documentTitle: widget.file.name,
+    );
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => _AiExplanationSheet(
+        selectedText: selectedText,
+        explanationFuture: future,
+      ),
+    );
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Widget _markdownView(String content) {
     final theme = Theme.of(context);
-    final isDark = widget.devicePreferenceNotifier.value.isDarkMode;
-    final fontSize = widget.devicePreferenceNotifier.value.readerFontSize;
-    final textColor = isDark
-        ? const Color(0xFFEDEFF2)
-        : theme.colorScheme.onSurface;
+    final isDark = theme.brightness == Brightness.dark;
+    final preferences = widget.devicePreferenceNotifier.value;
+    final fontSize = preferences.readerFontSize;
+    final englishFontFamily = preferences.readerEnglishFontFamily.trim();
+    final chineseFontFamily = preferences.readerChineseFontFamily.trim();
+    final textColor = isDark ? Colors.white : Colors.black;
+    TextStyle readerTextStyle({
+      required double fontSize,
+      required double height,
+      FontWeight? fontWeight,
+    }) {
+      return TextStyle(
+        fontSize: fontSize,
+        height: height,
+        fontWeight: fontWeight,
+        color: textColor,
+        fontFamily: englishFontFamily.isEmpty ? null : englishFontFamily,
+        fontFamilyFallback: chineseFontFamily.isEmpty
+            ? null
+            : [chineseFontFamily],
+      );
+    }
+
     final markdownConfig =
         (isDark ? MarkdownConfig.darkConfig : MarkdownConfig.defaultConfig)
             .copy(
               configs: [
                 PConfig(
-                  textStyle: TextStyle(
-                    fontSize: fontSize,
-                    height: 1.65,
-                    color: textColor,
+                  textStyle: readerTextStyle(fontSize: fontSize, height: 1.65),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h1.name,
+                  style: readerTextStyle(
+                    fontSize: 32,
+                    height: 40 / 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h2.name,
+                  style: readerTextStyle(
+                    fontSize: 24,
+                    height: 30 / 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h3.name,
+                  style: readerTextStyle(
+                    fontSize: 20,
+                    height: 25 / 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h4.name,
+                  style: readerTextStyle(
+                    fontSize: 16,
+                    height: 20 / 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h5.name,
+                  style: readerTextStyle(
+                    fontSize: 16,
+                    height: 20 / 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                _ReaderHeadingConfig(
+                  tag: MarkdownTag.h6.name,
+                  style: readerTextStyle(
+                    fontSize: 16,
+                    height: 20 / 16,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
                 CustomImgConfig(
@@ -1059,13 +1510,16 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         cachedRenderModel != null &&
             _cachedContent == content &&
             _cachedFontSize == fontSize &&
+            _cachedEnglishFontFamily == englishFontFamily &&
+            _cachedChineseFontFamily == chineseFontFamily &&
             _cachedIsDark == isDark
         ? cachedRenderModel
         : _ReaderRenderModel.fromMarkdown(
             content: content,
             config: markdownConfig,
             generator: MarkdownGenerator(
-              generators: [latexGenerator],
+              generators: [latexGenerator, mermaidGenerator],
+              blockSyntaxList: const [MermaidBlockSyntax(), LatexBlockSyntax()],
               inlineSyntaxList: [LatexSyntax()],
               textGenerator: (node, config, visitor) =>
                   CustomTextNode(node.textContent, config, visitor),
@@ -1074,30 +1528,93 @@ class _ReaderScreenState extends State<_ReaderScreen> {
           );
     _cachedContent = content;
     _cachedFontSize = fontSize;
+    _cachedEnglishFontFamily = englishFontFamily;
+    _cachedChineseFontFamily = chineseFontFamily;
     _cachedIsDark = isDark;
     _cachedRenderModel = renderModel;
+    if (cachedRenderModel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _updateActiveHeadingFromScroll();
+          setState(() {});
+        }
+      });
+    }
 
     return NotificationListener<UserScrollNotification>(
       onNotification: _handleScrollNotification,
       child: Scrollbar(
         controller: _scrollController,
         interactive: true,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => _setTopBarVisible(false),
-          child: ListView.builder(
-            controller: _scrollController,
-            cacheExtent: 2400,
-            padding: EdgeInsets.fromLTRB(
-              18,
-              12,
-              18,
-              MediaQuery.paddingOf(context).bottom + kToolbarHeight + 28,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _handleReaderPointerDown,
+          onPointerUp: _handleReaderPointerUp,
+          child: SelectionArea(
+            key: _selectionAreaKey,
+            onSelectionChanged: _handleSelectionChanged,
+            contextMenuBuilder: _selectionContextMenu,
+            child: ListView.builder(
+              controller: _scrollController,
+              cacheExtent: 2400,
+              padding: EdgeInsets.fromLTRB(
+                18,
+                12,
+                18,
+                MediaQuery.paddingOf(context).bottom + kToolbarHeight + 28,
+              ),
+              itemCount: renderModel.widgets.length,
+              itemBuilder: (context, index) => _ReaderMarkdownItem(
+                key: renderModel.itemKeys[index],
+                child: renderModel.widgets[index],
+              ),
             ),
-            itemCount: renderModel.widgets.length,
-            itemBuilder: (context, index) => _ReaderMarkdownItem(
-              key: renderModel.itemKeys[index],
-              child: renderModel.widgets[index],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sourceView(String content) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final preferences = widget.devicePreferenceNotifier.value;
+    final englishFontFamily = preferences.readerEnglishFontFamily.trim();
+    final textColor = isDark ? Colors.white : Colors.black;
+    return NotificationListener<UserScrollNotification>(
+      onNotification: _handleScrollNotification,
+      child: Scrollbar(
+        controller: _scrollController,
+        interactive: true,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _handleReaderPointerDown,
+          onPointerUp: _handleReaderPointerUp,
+          child: SelectionArea(
+            key: _selectionAreaKey,
+            onSelectionChanged: _handleSelectionChanged,
+            contextMenuBuilder: _selectionContextMenu,
+            child: ListView(
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(
+                18,
+                12,
+                18,
+                MediaQuery.paddingOf(context).bottom + kToolbarHeight + 28,
+              ),
+              children: [
+                Text(
+                  content,
+                  style: TextStyle(
+                    color: textColor,
+                    fontFamily: englishFontFamily.isEmpty
+                        ? 'monospace'
+                        : englishFontFamily,
+                    fontSize: (preferences.readerFontSize - 1).clamp(12, 27),
+                    height: 1.55,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1107,7 +1624,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = widget.devicePreferenceNotifier.value.isDarkMode;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final backgroundColor = isDark
         ? Colors.black
         : Theme.of(context).colorScheme.surface;
@@ -1121,7 +1638,9 @@ class _ReaderScreenState extends State<_ReaderScreen> {
         }
       },
       drawer: _ReaderTocDrawer(
+        key: ValueKey(_safeActiveHeadingIndex),
         headings: _cachedRenderModel?.headings ?? const [],
+        activeHeadingIndex: _safeActiveHeadingIndex,
         onHeadingSelected: _jumpToHeading,
       ),
       body: ColoredBox(
@@ -1145,8 +1664,12 @@ class _ReaderScreenState extends State<_ReaderScreen> {
                     );
                   }
                   final content = snapshot.requireData;
+                  _currentContent = content.content;
+                  _rememberStats(content.stats);
                   _showContentStatus(content.status);
-                  return _markdownView(content.content);
+                  return _isSourceView
+                      ? _sourceView(content.content)
+                      : _markdownView(content.content);
                 },
               ),
             ),
@@ -1154,7 +1677,10 @@ class _ReaderScreenState extends State<_ReaderScreen> {
               visible: _isTopBarVisible,
               title: widget.file.name,
               isDark: isDark,
+              isSourceView: _isSourceView,
               onToggleTheme: _toggleTheme,
+              onToggleSourceView: _toggleSourceView,
+              onEdit: _openEditor,
               onRefresh: _refresh,
               onOpenSettings: widget.onSettingsPressed,
             ),
@@ -1162,6 +1688,7 @@ class _ReaderScreenState extends State<_ReaderScreen> {
               visible: _isTopBarVisible,
               previousFile: _previousFile,
               nextFile: _nextFile,
+              stats: _currentStats,
               onPrevious: _previousFile == null
                   ? null
                   : () => unawaited(
@@ -1180,18 +1707,235 @@ class _ReaderScreenState extends State<_ReaderScreen> {
 }
 
 class _ReaderContent {
-  const _ReaderContent({required this.content, required this.status});
+  const _ReaderContent({
+    required this.content,
+    required this.status,
+    required this.stats,
+  });
+
+  factory _ReaderContent.fromContent({
+    required String content,
+    required _ReaderContentStatus status,
+  }) {
+    return _ReaderContent(
+      content: content,
+      status: status,
+      stats: _ReaderTextStats.fromContent(content),
+    );
+  }
 
   final String content;
   final _ReaderContentStatus status;
+  final _ReaderTextStats stats;
+}
+
+class _ReaderTextStats {
+  const _ReaderTextStats({required this.characters, required this.words});
+
+  factory _ReaderTextStats.fromContent(String content) {
+    final characters = content.replaceAll(RegExp(r'\s'), '').length;
+    final words = RegExp(
+      r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*",
+    ).allMatches(content).length;
+    return _ReaderTextStats(characters: characters, words: words);
+  }
+
+  final int characters;
+  final int words;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _ReaderTextStats &&
+        other.characters == characters &&
+        other.words == words;
+  }
+
+  @override
+  int get hashCode => Object.hash(characters, words);
 }
 
 enum _ReaderContentStatus {
   upToDate,
   updated,
   downloaded,
+  localDraft,
   offlineCached,
   networkFailedCached,
+}
+
+class _ReaderHeadingConfig extends HeadingConfig {
+  @override
+  final String tag;
+
+  @override
+  final TextStyle style;
+
+  const _ReaderHeadingConfig({required this.tag, required this.style});
+}
+
+class _ReaderStatusToast extends StatefulWidget {
+  final String message;
+
+  const _ReaderStatusToast({required this.message});
+
+  @override
+  State<_ReaderStatusToast> createState() => _ReaderStatusToastState();
+}
+
+class _ReaderStatusToastState extends State<_ReaderStatusToast> {
+  var _visible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.delayed(const Duration(milliseconds: 900), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _visible = false;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: MediaQuery.paddingOf(context).bottom + 16,
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          opacity: _visible ? 1 : 0,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOut,
+          child: Material(
+            color: Colors.transparent,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.inverseSurface,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  child: Text(
+                    widget.message,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onInverseSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AiExplanationSheet extends StatelessWidget {
+  final String selectedText;
+  final Future<String> explanationFuture;
+
+  const _AiExplanationSheet({
+    required this.selectedText,
+    required this.explanationFuture,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.78,
+      minChildSize: 0.42,
+      maxChildSize: 0.96,
+      builder: (context, scrollController) {
+        return Material(
+          color: theme.colorScheme.surface,
+          child: FutureBuilder<String>(
+            future: explanationFuture,
+            builder: (context, snapshot) {
+              final hasResult =
+                  snapshot.connectionState == ConnectionState.done;
+              return ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Query',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        tooltip: 'Close',
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Selected text',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: theme.colorScheme.outline),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        selectedText,
+                        maxLines: 8,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  if (!hasResult)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: CircularProgressIndicator.adaptive(),
+                      ),
+                    )
+                  else if (snapshot.hasError)
+                    Text(
+                      snapshot.error.toString(),
+                      style: TextStyle(color: theme.colorScheme.error),
+                    )
+                  else
+                    SelectableText(
+                      snapshot.requireData,
+                      style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
+                    ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _ReaderRenderModel {
@@ -1239,13 +1983,25 @@ class _ReaderRenderModel {
     final headings = <_MarkdownHeading>[];
     final lines = content.split('\n');
     var isInFence = false;
+    String? latexClosingMarker;
     for (var index = 0; index < lines.length; index++) {
       final line = lines[index].trimRight();
       if (RegExp(r'^\s{0,3}(```|~~~)').hasMatch(line)) {
         isInFence = !isInFence;
         continue;
       }
+      if (latexClosingMarker != null) {
+        if (line.trim() == latexClosingMarker) {
+          latexClosingMarker = null;
+        }
+        continue;
+      }
       if (isInFence) {
+        continue;
+      }
+      final trimmedLine = line.trim();
+      if (trimmedLine == r'$$' || trimmedLine == r'\[') {
+        latexClosingMarker = trimmedLine == r'$$' ? r'$$' : r'\]';
         continue;
       }
       final atxMatch = RegExp(
@@ -1330,79 +2086,189 @@ class _ReaderHeading {
   final int widgetIndex;
 }
 
-class _ReaderMarkdownItem extends StatefulWidget {
+class _ReaderMarkdownItem extends StatelessWidget {
   final Widget child;
 
   const _ReaderMarkdownItem({super.key, required this.child});
 
   @override
-  State<_ReaderMarkdownItem> createState() => _ReaderMarkdownItemState();
-}
-
-class _ReaderMarkdownItemState extends State<_ReaderMarkdownItem>
-    with AutomaticKeepAliveClientMixin {
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context);
-    return RepaintBoundary(child: widget.child);
+    return RepaintBoundary(child: child);
   }
 }
 
-class _ReaderTocDrawer extends StatelessWidget {
+class _ReaderTocDrawer extends StatefulWidget {
   final List<_ReaderHeading> headings;
+  final int activeHeadingIndex;
   final ValueChanged<_ReaderHeading> onHeadingSelected;
 
   const _ReaderTocDrawer({
+    super.key,
     required this.headings,
+    required this.activeHeadingIndex,
     required this.onHeadingSelected,
   });
 
   @override
+  State<_ReaderTocDrawer> createState() => _ReaderTocDrawerState();
+}
+
+class _ReaderTocDrawerState extends State<_ReaderTocDrawer> {
+  late final ScrollController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ScrollController(
+      initialScrollOffset: (widget.activeHeadingIndex * 52 - 96)
+          .clamp(0, double.infinity)
+          .toDouble(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surfaceColor = isDark ? Colors.black : Colors.white;
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.black.withValues(alpha: 0.08);
+    final textColor = isDark ? Colors.white : Colors.black;
+    final mutedTextColor = isDark
+        ? Colors.white.withValues(alpha: 0.62)
+        : Colors.black.withValues(alpha: 0.55);
+    final activeBackgroundColor = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : theme.colorScheme.primary.withValues(alpha: 0.11);
+    final activeTextColor = isDark ? Colors.white : theme.colorScheme.primary;
     return Drawer(
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-              child: Text(
-                'Contents',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          topRight: Radius.circular(18),
+          bottomRight: Radius.circular(18),
+        ),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: surfaceColor,
+              border: Border(right: BorderSide(color: borderColor)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.42 : 0.12),
+                  blurRadius: 28,
+                  offset: const Offset(8, 0),
                 ),
+              ],
+            ),
+            child: SafeArea(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 18, 18, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Contents',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            color: textColor,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${widget.headings.length} headings',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: mutedTextColor,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(height: 1, color: borderColor),
+                  Expanded(
+                    child: widget.headings.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No headings found.',
+                              style: TextStyle(
+                                color: mutedTextColor,
+                                fontSize: 16,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: _controller,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            itemCount: widget.headings.length,
+                            itemBuilder: (context, index) {
+                              final heading = widget.headings[index];
+                              final isMajor = heading.level <= 2;
+                              final isActive =
+                                  index == widget.activeHeadingIndex;
+                              return Padding(
+                                padding: EdgeInsets.only(
+                                  left: 10 + (heading.level - 1) * 12,
+                                  right: 10,
+                                  top: 2,
+                                  bottom: 2,
+                                ),
+                                child: Material(
+                                  color: isActive
+                                      ? activeBackgroundColor
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(8),
+                                    onTap: () =>
+                                        widget.onHeadingSelected(heading),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 10,
+                                      ),
+                                      child: Text(
+                                        heading.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                              color: isActive
+                                                  ? activeTextColor
+                                                  : textColor,
+                                              fontSize: isMajor ? 17 : 16,
+                                              fontWeight: isActive
+                                                  ? FontWeight.w800
+                                                  : isMajor
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                              height: 1.25,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
               ),
             ),
-            const Divider(height: 1),
-            Expanded(
-              child: headings.isEmpty
-                  ? const Center(child: Text('No headings found.'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: headings.length,
-                      itemBuilder: (context, index) {
-                        final heading = headings[index];
-                        return ListTile(
-                          minVerticalPadding: 10,
-                          contentPadding: EdgeInsets.only(
-                            left: 16 + (heading.level - 1) * 14,
-                            right: 16,
-                          ),
-                          title: Text(
-                            heading.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => onHeadingSelected(heading),
-                        );
-                      },
-                    ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1413,7 +2279,10 @@ class _ReaderTopBar extends StatelessWidget {
   final bool visible;
   final String title;
   final bool isDark;
+  final bool isSourceView;
   final VoidCallback onToggleTheme;
+  final VoidCallback onToggleSourceView;
+  final Future<void> Function() onEdit;
   final VoidCallback onRefresh;
   final Future<void> Function() onOpenSettings;
 
@@ -1421,7 +2290,10 @@ class _ReaderTopBar extends StatelessWidget {
     required this.visible,
     required this.title,
     required this.isDark,
+    required this.isSourceView,
     required this.onToggleTheme,
+    required this.onToggleSourceView,
+    required this.onEdit,
     required this.onRefresh,
     required this.onOpenSettings,
   });
@@ -1478,6 +2350,18 @@ class _ReaderTopBar extends StatelessWidget {
                     icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
                   ),
                   IconButton(
+                    onPressed: onToggleSourceView,
+                    tooltip: isSourceView ? 'Render view' : 'Source view',
+                    color: foregroundColor,
+                    icon: Icon(isSourceView ? Icons.article : Icons.code),
+                  ),
+                  IconButton(
+                    onPressed: () => unawaited(onEdit()),
+                    tooltip: 'Edit',
+                    color: foregroundColor,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
                     onPressed: onRefresh,
                     tooltip: 'Refresh',
                     color: foregroundColor,
@@ -1503,6 +2387,7 @@ class _ReaderBottomBar extends StatelessWidget {
   final bool visible;
   final GithubMarkdownFile? previousFile;
   final GithubMarkdownFile? nextFile;
+  final _ReaderTextStats stats;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
 
@@ -1510,6 +2395,7 @@ class _ReaderBottomBar extends StatelessWidget {
     required this.visible,
     required this.previousFile,
     required this.nextFile,
+    required this.stats,
     required this.onPrevious,
     required this.onNext,
   });
@@ -1560,9 +2446,19 @@ class _ReaderBottomBar extends StatelessWidget {
                       ),
                     ),
                     Container(
-                      width: 1,
-                      height: 28,
-                      color: theme.colorScheme.outlineVariant,
+                      constraints: const BoxConstraints(minWidth: 92),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Text(
+                        '${stats.characters} chars\n${stats.words} words',
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: foregroundColor.withValues(alpha: 0.72),
+                          height: 1.12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                     Expanded(
                       child: TextButton.icon(

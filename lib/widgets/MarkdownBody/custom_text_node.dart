@@ -143,7 +143,7 @@ class CustomTextNode extends ElementNode {
     final textStyle = config.p.textStyle.merge(parentStyle);
     children.clear();
     if (!text.contains(htmlRep)) {
-      accept(TextNode(text: text, style: textStyle));
+      _acceptTextByScript(textStyle);
       return;
     }
     //Intercept as table tag
@@ -168,4 +168,70 @@ class CustomTextNode extends ElementNode {
       accept(element);
     }
   }
+
+  void _acceptTextByScript(TextStyle textStyle) {
+    final fontFamilyFallback = textStyle.fontFamilyFallback;
+    final chineseFontFamily =
+        fontFamilyFallback == null || fontFamilyFallback.isEmpty
+        ? null
+        : fontFamilyFallback.first;
+    if (chineseFontFamily == null || chineseFontFamily.isEmpty) {
+      accept(TextNode(text: text, style: textStyle));
+      return;
+    }
+
+    final buffer = StringBuffer();
+    bool? currentIsChinese;
+    for (final rune in text.runes) {
+      final isChinese = _isChineseRune(rune);
+      if (currentIsChinese != null && currentIsChinese != isChinese) {
+        _acceptTextSegment(
+          buffer.toString(),
+          textStyle,
+          currentIsChinese,
+          chineseFontFamily,
+        );
+        buffer.clear();
+      }
+      buffer.writeCharCode(rune);
+      currentIsChinese = isChinese;
+    }
+    if (buffer.isNotEmpty) {
+      _acceptTextSegment(
+        buffer.toString(),
+        textStyle,
+        currentIsChinese ?? false,
+        chineseFontFamily,
+      );
+    }
+  }
+
+  void _acceptTextSegment(
+    String value,
+    TextStyle textStyle,
+    bool isChinese,
+    String chineseFontFamily,
+  ) {
+    accept(
+      TextNode(
+        text: value,
+        style: isChinese
+            ? textStyle.copyWith(fontFamily: chineseFontFamily)
+            : textStyle,
+      ),
+    );
+  }
+}
+
+bool _isChineseRune(int rune) {
+  return (rune >= 0x3400 && rune <= 0x4DBF) ||
+      (rune >= 0x4E00 && rune <= 0x9FFF) ||
+      (rune >= 0xF900 && rune <= 0xFAFF) ||
+      (rune >= 0x20000 && rune <= 0x2A6DF) ||
+      (rune >= 0x2A700 && rune <= 0x2B73F) ||
+      (rune >= 0x2B740 && rune <= 0x2B81F) ||
+      (rune >= 0x2B820 && rune <= 0x2CEAF) ||
+      (rune >= 0x2CEB0 && rune <= 0x2EBEF) ||
+      (rune >= 0x3000 && rune <= 0x303F) ||
+      (rune >= 0xFF00 && rune <= 0xFFEF);
 }

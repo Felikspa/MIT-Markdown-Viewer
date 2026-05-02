@@ -74,6 +74,43 @@ class GithubClient {
     return utf8.decode(base64.decode(content.replaceAll('\n', '')));
   }
 
+  Future<GithubUpdatedFile> updateMarkdownFile({
+    required String path,
+    required String content,
+    required String sha,
+    required String message,
+  }) async {
+    final uri = Uri.https(
+      'api.github.com',
+      '/repos/${_config.owner}/${_config.repo}/contents/$path',
+    );
+    final response = await _httpClient.put(
+      uri,
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'message': message,
+        'content': base64.encode(utf8.encode(content)),
+        'sha': sha,
+        'branch': _config.branch,
+      }),
+    );
+    final body = _decodeJsonObject(response);
+    _throwForError(response, body);
+    final responseContent = body['content'];
+    if (responseContent is! Map<String, Object?>) {
+      throw const GithubApiException(
+        'GitHub update response is missing content.',
+      );
+    }
+    final updatedSha = responseContent['sha'];
+    if (updatedSha is! String || updatedSha.isEmpty) {
+      throw const GithubApiException(
+        'GitHub update response is missing file sha.',
+      );
+    }
+    return GithubUpdatedFile(sha: updatedSha);
+  }
+
   Map<String, Object?> _decodeJsonObject(http.Response response) {
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, Object?>) {
@@ -95,4 +132,10 @@ class GithubClient {
       statusCode: response.statusCode,
     );
   }
+}
+
+class GithubUpdatedFile {
+  const GithubUpdatedFile({required this.sha});
+
+  final String sha;
 }
